@@ -25,7 +25,9 @@ import {
   Database,
   Flame,
   UserCheck,
-  Building
+  Building,
+  Sun,
+  Moon
 } from "lucide-react";
 import {
   LineChart,
@@ -227,6 +229,18 @@ export default function App() {
 
   // Driver select filtering State
   const [driverSearchQuery, setDriverSearchQuery] = useState<string>("");
+
+  // Theme Switching State ("dark" | "light")
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    const saved = localStorage.getItem("f1_portal_theme");
+    return saved === "light" ? "light" : "dark";
+  });
+
+  const toggleTheme = () => {
+    const newTheme = theme === "dark" ? "light" : "dark";
+    setTheme(newTheme);
+    localStorage.setItem("f1_portal_theme", newTheme);
+  };
 
   // General Loading flags
   const [sessionsLoading, setSessionsLoading] = useState<boolean>(false);
@@ -570,7 +584,7 @@ export default function App() {
   });
 
   return (
-    <div className="bg-[#0b0c10] text-[#cfd2d6] font-sans min-h-screen flex flex-col overflow-x-hidden border-t-4 border-[#e10600]">
+    <div className={`bg-[#0b0c10] text-[#cfd2d6] font-sans min-h-screen flex flex-col overflow-x-hidden border-t-4 border-[#e10600] transition-colors duration-200 ${theme === "light" ? "theme-light" : "theme-dark"}`}>
       
       {/* 🏎️ MODERN STREAMLINED NAV-HEADER */}
       <header className="bg-gradient-to-b from-[#14151c] to-[#0d0e12] border-b border-[#252836] sticky top-0 z-50">
@@ -596,36 +610,58 @@ export default function App() {
             </div>
           </div>
 
-          {/* 🔘 PREMIUM VIEW SWITCHER */}
-          <nav className="flex bg-[#161824] p-1.5 rounded-xl border border-[#2d3142] w-full md:w-auto max-w-2xl overflow-x-auto scrollbar-none">
-            {[
-              { id: "telemetry", label: "Телеметрия Hub", icon: Activity, desc: "OpenF1 Live" },
-              { id: "standings", label: "Таблицы & Результаты", icon: Award, desc: "Jolpica API" },
-              { id: "fastf1", label: "FastF1 Оверлей", icon: Sliders, desc: "Lap Analysis" },
-              { id: "f1db", label: "F1DB Архив 1950", icon: Trophy, desc: "Historical Stat" }
-            ].map((tab) => {
-              const IsSelected = activeTab === tab.id;
-              const Icon = tab.icon;
-              return (
-                <button
-                  key={tab.id}
-                  id={`tab-${tab.id}`}
-                  onClick={() => setActiveTab(tab.id as any)}
-                  className={`flex items-center gap-2 px-4 py-2.5 rounded-lg transition-all duration-200 text-xs font-black uppercase tracking-wider shrink-0 mr-1 select-none ${
-                    IsSelected
-                      ? "bg-[#e10600] text-white shadow-lg shadow-[#e10600]/10"
-                      : "text-gray-400 hover:text-white hover:bg-white/5"
-                  }`}
-                >
-                  <Icon className="w-4 h-4 shrink-0" />
-                  <div className="text-left">
-                    <span className="block leading-none">{tab.label}</span>
-                    <span className={`block text-[9px] lowercase font-mono opacity-60 leading-none mt-0.5 ${IsSelected ? "text-white" : "text-gray-500"}`}>{tab.desc}</span>
-                  </div>
-                </button>
-              );
-            })}
-          </nav>
+          {/* 🔘 PREMIUM VIEW SWITCHER & THEME ADJUSTMENT */}
+          <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
+            <nav className="flex bg-[#161824] p-1.5 rounded-xl border border-[#2d3142] w-full sm:w-auto max-w-2xl overflow-x-auto scrollbar-none">
+              {[
+                { id: "telemetry", label: "Телеметрия Hub", icon: Activity, desc: "OpenF1 Live" },
+                { id: "standings", label: "Таблицы & Результаты", icon: Award, desc: "Jolpica API" },
+                { id: "fastf1", label: "FastF1 Оверлей", icon: Sliders, desc: "Lap Analysis" },
+                { id: "f1db", label: "F1DB Архив 1950", icon: Trophy, desc: "Historical Stat" }
+              ].map((tab) => {
+                const IsSelected = activeTab === tab.id;
+                const Icon = tab.icon;
+                return (
+                  <button
+                    key={tab.id}
+                    id={`tab-${tab.id}`}
+                    onClick={() => setActiveTab(tab.id as any)}
+                    className={`flex items-center gap-2 px-4 py-2.5 rounded-lg transition-all duration-200 text-xs font-black uppercase tracking-wider shrink-0 mr-1 select-none ${
+                      IsSelected
+                        ? "bg-[#e10600] text-white shadow-lg shadow-[#e10600]/10"
+                        : "text-gray-400 hover:text-white hover:bg-white/5"
+                    }`}
+                  >
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <div className="text-left">
+                      <span className="block leading-none">{tab.label}</span>
+                      <span className={`block text-[9px] lowercase font-mono opacity-60 leading-none mt-0.5 ${IsSelected ? "text-white" : "text-gray-500"}`}>{tab.desc}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </nav>
+
+            {/* 🌓 THEME TOGGLE SWITCH */}
+            <button
+              id="btn-toggle-theme"
+              onClick={toggleTheme}
+              className="p-3 px-4 rounded-xl border border-[#2d3142] bg-[#161824] hover:bg-[#1f2133] hover:border-[#383d53] text-gray-300 hover:text-white transition flex items-center justify-center gap-2 select-none duration-150 active:scale-95 text-[10px] font-black uppercase tracking-wider h-[46px] shrink-0 self-end sm:self-auto min-w-[46px]"
+              title={theme === "dark" ? "Переключить на светлую тему" : "Переключить на тёмную тему"}
+            >
+              {theme === "dark" ? (
+                <>
+                  <Sun className="w-3.5 h-3.5 text-yellow-400 shrink-0" />
+                  <span className="inline-block">Светлая</span>
+                </>
+              ) : (
+                <>
+                  <Moon className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                  <span className="inline-block">Тёмная</span>
+                </>
+              )}
+            </button>
+          </div>
 
         </div>
       </header>
