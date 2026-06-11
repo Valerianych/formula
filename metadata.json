@@ -1,0 +1,6 @@
+{
+  "name": "F1 AI Analyst",
+  "description": "Приложение для интерактивного анализа данных Формулы-1 с искусственным интеллектом Gemini",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
