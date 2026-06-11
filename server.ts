@@ -1,7 +1,6 @@
 import express from "express";
 import path from "path";
 import dotenv from "dotenv";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { MOCK_SESSIONS } from "./src/f1_mock.js"; // Use absolute relative import or standard
 
@@ -529,6 +528,7 @@ ${eventsText}
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     console.log("Starting server in DEVELOPMENT mode with Vite Middleware...");
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -536,7 +536,7 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     console.log("Starting server in PRODUCTION mode with built static assets...");
-    const distPath = path.join(process.cwd(), "dist");
+    const distPath = typeof __dirname !== "undefined" ? __dirname : path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));

@@ -225,6 +225,9 @@ export default function App() {
   const [f1dbSearchQuery, setF1dbSearchQuery] = useState<string>("");
   const [f1dbCategory, setF1dbCategory] = useState<"all" | "drivers" | "teams" | "records">("all");
 
+  // Driver select filtering State
+  const [driverSearchQuery, setDriverSearchQuery] = useState<string>("");
+
   // General Loading flags
   const [sessionsLoading, setSessionsLoading] = useState<boolean>(false);
   const [dataLoading, setDataLoading] = useState<boolean>(false);
@@ -232,6 +235,54 @@ export default function App() {
   const [aiLoading, setAiLoading] = useState<boolean>(false);
   const [isDemoData, setIsDemoData] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>("");
+
+  // Driver comparison modal states
+  const [isCompareModalOpen, setIsCompareModalOpen] = useState<boolean>(false);
+  const [compareDriverA, setCompareDriverA] = useState<Driver | null>(null);
+  const [compareDriverB, setCompareDriverB] = useState<Driver | null>(null);
+  const [compareLapsA, setCompareLapsA] = useState<Lap[]>([]);
+  const [compareLapsB, setCompareLapsB] = useState<Lap[]>([]);
+  const [isCompareLoading, setIsCompareLoading] = useState<boolean>(false);
+
+  const fetchComparisonData = async (drvA: Driver | null, drvB: Driver | null) => {
+    if (!selectedSessionKey || !drvA || !drvB) return;
+    setIsCompareLoading(true);
+    try {
+      const [resA, resB] = await Promise.all([
+        fetch(`/api/driver-laps?session_key=${selectedSessionKey}&driver_number=${drvA.driver_number}`).then(r => r.json()),
+        fetch(`/api/driver-laps?session_key=${selectedSessionKey}&driver_number=${drvB.driver_number}`).then(r => r.json())
+      ]);
+      
+      if (resA.success) {
+        setCompareLapsA(resA.laps || []);
+      }
+      if (resB.success) {
+        setCompareLapsB(resB.laps || []);
+      }
+    } catch (err) {
+      console.error("Error fetching comparison laps:", err);
+    } finally {
+      setIsCompareLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isCompareModalOpen && compareDriverA && compareDriverB) {
+      fetchComparisonData(compareDriverA, compareDriverB);
+    }
+  }, [isCompareModalOpen, compareDriverA?.driver_number, compareDriverB?.driver_number, selectedSessionKey]);
+
+  const openCompareModal = () => {
+    setIsCompareModalOpen(true);
+    if (selectedDriver) {
+      setCompareDriverA(selectedDriver);
+      const otherDriver = drivers.find(d => d.driver_number !== selectedDriver.driver_number) || null;
+      setCompareDriverB(otherDriver);
+    } else if (drivers.length > 0) {
+      setCompareDriverA(drivers[0]);
+      setCompareDriverB(drivers[1] || null);
+    }
+  };
 
   // ========================================================
   // 1. Core Loader: Year sessions (OpenF1 / Fallback)
@@ -284,6 +335,7 @@ export default function App() {
     setDataLoading(true);
     setErrorMessage("");
     setSelectedDriver(null);
+    setDriverSearchQuery("");
     setDriverLaps([]);
     setBestLapTime(null);
     setAvgLapTime(null);
@@ -468,6 +520,53 @@ export default function App() {
     if (f1dbCategory === "all") return matchesSearch;
     if (f1dbCategory === "drivers") return matchesSearch && item.year !== undefined;
     return false;
+  });
+
+  // Stats inside modal helpers
+  const bestA = compareLapsA.filter(l => l.lap_duration && l.lap_duration > 0).map(l => l.lap_duration as number);
+  const minA = bestA.length > 0 ? Math.min(...bestA) : null;
+  const avgA = bestA.length > 0 ? bestA.reduce((sum, v) => sum + v, 0) / bestA.length : null;
+
+  const bestB = compareLapsB.filter(l => l.lap_duration && l.lap_duration > 0).map(l => l.lap_duration as number);
+  const minB = bestB.length > 0 ? Math.min(...bestB) : null;
+  const avgB = bestB.length > 0 ? bestB.reduce((sum, v) => sum + v, 0) / bestB.length : null;
+
+  const strokeA = getTeamColor(compareDriverA?.team_colour || "e10600");
+  let strokeB = getTeamColor(compareDriverB?.team_colour || "3b82f6");
+  if (strokeA.toLowerCase() === strokeB.toLowerCase()) {
+    strokeB = "#facc15"; // yellow-400 contrast highlight for teammate
+  }
+
+  // Combined chart generation
+  const allLapNumbers = Array.from(
+    new Set([
+      ...compareLapsA.map(l => l.lap_number),
+      ...compareLapsB.map(l => l.lap_number)
+    ])
+  ).sort((a, b) => a - b);
+
+  const combinedChartData = allLapNumbers.map((lapNum) => {
+    const lapA = compareLapsA.find(l => l.lap_number === lapNum);
+    const lapB = compareLapsB.find(l => l.lap_number === lapNum);
+    return {
+      lap: `L${lapNum}`,
+      lapNum,
+      [compareDriverA?.name_acronym || "Пилот А"]: lapA?.lap_duration && lapA.lap_duration > 0 ? Number(lapA.lap_duration.toFixed(3)) : null,
+      [compareDriverB?.name_acronym || "Пилот Б"]: lapB?.lap_duration && lapB.lap_duration > 0 ? Number(lapB.lap_duration.toFixed(3)) : null,
+    };
+  });
+
+  // Filter drivers by search query
+  const filteredDrivers = drivers.filter((d) => {
+    if (!driverSearchQuery) return true;
+    const query = driverSearchQuery.trim().toLowerCase();
+    return (
+      d.broadcast_name?.toLowerCase().includes(query) ||
+      d.full_name?.toLowerCase().includes(query) ||
+      d.team_name?.toLowerCase().includes(query) ||
+      d.name_acronym?.toLowerCase().includes(query) ||
+      String(d.driver_number).includes(query)
+    );
   });
 
   return (
@@ -726,10 +825,49 @@ export default function App() {
             </div>
 
             {/* DRIVERS ACTIVE CHIP SELECTOR BAND */}
-            <div className="space-y-2">
-              <h3 className="text-xs font-black uppercase text-[#e10600] tracking-widest flex items-center gap-2">
-                <Users className="w-4 h-4" /> Шаг 2: Выберите пилота для построения графиков
-              </h3>
+            <div className="space-y-3 bg-[#11131e]/40 p-4 sm:p-5 rounded-2xl border border-[#212333]/60">
+              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 border-b border-[#212333]/45 pb-3">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                  <h3 className="text-xs font-black uppercase text-[#e10600] tracking-widest flex items-center gap-2">
+                    <Users className="w-4 h-4" /> Шаг 2: Выберите пилота для построения графиков
+                  </h3>
+                  
+                  {/* Search input field */}
+                  {drivers.length > 0 && (
+                    <div className="relative min-w-[220px]">
+                      <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                        <Search className="w-3.5 h-3.5 text-gray-500" />
+                      </span>
+                      <input
+                        type="text"
+                        id="driver-search-input"
+                        placeholder="Поиск пилота / команды / номера..."
+                        value={driverSearchQuery}
+                        onChange={(e) => setDriverSearchQuery(e.target.value)}
+                        className="w-full bg-[#090a0f]/80 border border-[#2c2f44] hover:border-[#3f4460] focus:border-[#e10600] rounded-xl pl-9 pr-8 py-2 text-xs font-bold text-white placeholder-gray-500 focus:outline-none transition duration-150"
+                      />
+                      {driverSearchQuery && (
+                        <button
+                          type="button"
+                          onClick={() => setDriverSearchQuery("")}
+                          className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-white font-black text-xs transition"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+                
+                <button
+                  id="btn-compare-drivers"
+                  onClick={openCompareModal}
+                  disabled={drivers.length < 2}
+                  className="flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-[#e10600] to-[#b30500] hover:from-[#ff1a12] hover:to-[#e10600] active:scale-95 disabled:opacity-50 disabled:pointer-events-none text-white font-black text-[10px] uppercase tracking-wider transition-all duration-150 shadow-md shadow-[#e10600]/15 self-start lg:self-auto"
+                >
+                  <Sliders className="w-3.5 h-3.5" /> Сравнить пилотов
+                </button>
+              </div>
               
               {dataLoading ? (
                 <div className="flex gap-2.5 overflow-x-auto pb-2">
@@ -741,9 +879,13 @@ export default function App() {
                 <div className="text-center py-6 bg-[#14151f]/50 border border-[#222533] rounded-xl text-xs text-gray-500 font-bold">
                   В этой сессии нет пилотов в базе. Рекомендуем сезон 2025 или 2024.
                 </div>
+              ) : filteredDrivers.length === 0 ? (
+                <div className="text-center py-6 bg-[#14151f]/30 border border-[#212333] rounded-xl text-xs text-gray-400">
+                  Пилоты по запросу &quot;<span className="text-white font-black">{driverSearchQuery}</span>&quot; не найдены.
+                </div>
               ) : (
                 <div className="flex items-center gap-3.5 overflow-x-auto pb-3 pt-1 scrollbar-thin">
-                  {drivers.map((d) => {
+                  {filteredDrivers.map((d) => {
                     const isSelected = selectedDriver?.driver_number === d.driver_number;
                     const cColor = getTeamColor(d.team_colour);
                     return (
@@ -1559,6 +1701,257 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {/* 🏎️ COMPARE DRIVERS MODAL */}
+      <AnimatePresence>
+        {isCompareModalOpen && (
+          <div className="fixed inset-0 z-50 overflow-y-auto bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+              className="bg-[#141520] border border-[#2c2f44] rounded-2xl w-full max-w-5xl max-h-[92vh] overflow-y-auto flex flex-col shadow-2xl relative"
+            >
+              
+              {/* Header */}
+              <div className="p-5 border-b border-[#212333] flex items-center justify-between bg-gradient-to-r from-[#171825] to-[#141520]">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 bg-[#e10600] flex items-center justify-center rounded">
+                    <Sliders className="w-4 h-4 text-white" />
+                  </div>
+                  <div>
+                    <h2 className="text-xs font-black uppercase text-white tracking-widest leading-none">
+                      Сравнение темпа пилотов
+                    </h2>
+                    <span className="text-[10px] text-gray-500 font-mono block mt-1">
+                      📌 {sessionInfo ? `${sessionInfo.meeting_name} • ${sessionInfo.session_name}` : "Сессия гонок"}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  id="btn-close-modal-x"
+                  onClick={() => setIsCompareModalOpen(false)}
+                  className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-gray-400 hover:text-white transition font-mono text-xs"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-6 space-y-6">
+                
+                {/* Driver Pickers */}
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center bg-[#090a0f] p-4 rounded-xl border border-[#212333]">
+                  
+                  {/* Driver A picker */}
+                  <div className="md:col-span-5 space-y-1.5 text-left">
+                    <label className="text-[9px] uppercase font-black text-gray-400 tracking-wider flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#e10600]"></span> Первый пилот (A)
+                    </label>
+                    <select
+                      id="select-compare-driver-a"
+                      value={compareDriverA?.driver_number || ""}
+                      onChange={(e) => {
+                        const drv = drivers.find(d => d.driver_number === Number(e.target.value));
+                        if (drv) setCompareDriverA(drv);
+                      }}
+                      className="w-full bg-[#141520] border border-[#2a2d41] p-2.5 text-xs font-black text-white rounded-lg focus:outline-none focus:border-[#e10600] cursor-pointer"
+                      style={{ borderLeft: `4px solid ${getTeamColor(compareDriverA?.team_colour || "")}` }}
+                    >
+                      {drivers.map(d => (
+                        <option key={d.driver_number} value={d.driver_number}>
+                          {d.name_acronym} — {d.broadcast_name} ({d.team_name})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* VS Badge */}
+                  <div className="md:col-span-2 flex justify-center py-2 md:py-0">
+                    <div className="w-10 h-10 rounded-full bg-[#e10600]/10 border border-[#e10600]/30 flex items-center justify-center">
+                      <span className="text-xs font-black italic text-[#e10600] tracking-tighter">VS</span>
+                    </div>
+                  </div>
+
+                  {/* Driver B picker */}
+                  <div className="md:col-span-5 space-y-1.5 text-left">
+                    <label className="text-[9px] uppercase font-black text-gray-400 tracking-wider flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#3b82f6]"></span> Второй пилот (B)
+                    </label>
+                    <select
+                      id="select-compare-driver-b"
+                      value={compareDriverB?.driver_number || ""}
+                      onChange={(e) => {
+                        const drv = drivers.find(d => d.driver_number === Number(e.target.value));
+                        if (drv) setCompareDriverB(drv);
+                      }}
+                      className="w-full bg-[#141520] border border-[#2a2d41] p-2.5 text-xs font-black text-white rounded-lg focus:outline-none focus:border-[#e10600] cursor-pointer"
+                      style={{ borderLeft: `4px solid ${getTeamColor(compareDriverB?.team_colour || "")}` }}
+                    >
+                      {drivers.map(d => (
+                        <option key={d.driver_number} value={d.driver_number}>
+                          {d.name_acronym} — {d.broadcast_name} ({d.team_name})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                </div>
+
+                {/* Validation Warning when Teammate or same profile */}
+                {compareDriverA?.driver_number === compareDriverB?.driver_number && (
+                  <div className="bg-yellow-500/10 border border-yellow-500/20 text-yellow-200 p-3 rounded-lg text-[11px] font-mono flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-yellow-500 shrink-0" />
+                    <span>Выберите разных пилотов для наглядного сравнения и разницы темпа круга!</span>
+                  </div>
+                )}
+
+                {/* Main Graph & Comparative Dashboard */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+                  
+                  {/* Graph */}
+                  <div className="lg:col-span-8 bg-[#10111a] border border-[#212333] rounded-xl p-5 flex flex-col justify-between">
+                    <div>
+                      <h3 className="text-xs font-black uppercase text-white tracking-widest mb-3 flex items-center gap-1.5">
+                        <Activity className="w-4 h-4 text-[#e10600]" /> Совмещенный график кругов
+                      </h3>
+                      
+                      {isCompareLoading ? (
+                        <div className="h-[280px] flex flex-col items-center justify-center gap-3">
+                          <RefreshCw className="w-8 h-8 text-[#e10600] animate-spin" />
+                          <span className="text-[10px] text-gray-400 font-mono tracking-widest uppercase">Запрос телеметрии пилотов...</span>
+                        </div>
+                      ) : compareLapsA.length === 0 && compareLapsB.length === 0 ? (
+                        <div className="h-[280px] flex flex-col items-center justify-center text-center text-gray-500 text-xs">
+                          <Info className="w-8 h-8 mb-2" />
+                          <span>Данные кругов отсутствуют для выбранной пары.</span>
+                        </div>
+                      ) : (
+                        <div className="w-full h-[285px]">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart
+                              data={combinedChartData}
+                              margin={{ top: 10, right: 10, left: -25, bottom: 5 }}
+                            >
+                              <CartesianGrid stroke="#1c1d29" strokeDasharray="3 3" />
+                              <XAxis dataKey="lap" stroke="#5d627c" style={{ fontSize: 9, fontFamily: "monospace" }} />
+                              <YAxis stroke="#5d627c" style={{ fontSize: 9, fontFamily: "monospace" }} domain={["auto", "auto"]} />
+                              <Tooltip
+                                contentStyle={{ backgroundColor: "#0c0d12", borderColor: "#242637", color: "#ccc", borderRadius: "10px" }}
+                                itemStyle={{ fontSize: 11, fontFamily: "monospace" }}
+                              />
+                              <Legend wrapperStyle={{ fontSize: 10, fontFamily: "monospace", paddingTop: 10 }} />
+                              <Line
+                                type="monotone"
+                                dataKey={compareDriverA?.name_acronym || "Driver A"}
+                                stroke={strokeA}
+                                strokeWidth={3}
+                                dot={{ r: 4, stroke: "#0b0c10", strokeWidth: 1.5 }}
+                                activeDot={{ r: 6 }}
+                                connectNulls
+                              />
+                              <Line
+                                type="monotone"
+                                dataKey={compareDriverB?.name_acronym || "Driver B"}
+                                stroke={strokeB}
+                                strokeWidth={3}
+                                dot={{ r: 4, stroke: "#0b0c10", strokeWidth: 1.5 }}
+                                activeDot={{ r: 6 }}
+                                connectNulls
+                              />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Side comparison stats board */}
+                  <div className="lg:col-span-4 flex flex-col gap-4 justify-between">
+                    
+                    {/* Driver A stats card */}
+                    <div className="bg-[#0e0f17] border border-[#212333] p-4 rounded-xl space-y-3 relative overflow-hidden" style={{ borderLeft: `4px solid ${strokeA}` }}>
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs font-black text-white uppercase truncate max-w-[130px]">{compareDriverA?.broadcast_name || "Driver A"}</span>
+                        <span className="text-[10px] font-mono text-gray-400 bg-white/5 py-0.5 px-2 rounded">{compareDriverA?.name_acronym}</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-center text-xs font-mono">
+                        <div className="bg-[#05060a] p-2 rounded">
+                          <span className="text-[8px] text-gray-500 uppercase block">Рекорд</span>
+                          <span className="text-white font-bold text-xs">{formatLapTime(minA)}</span>
+                        </div>
+                        <div className="bg-[#05060a] p-2 rounded">
+                          <span className="text-[8px] text-gray-500 uppercase block">Средний Pace</span>
+                          <span className="text-white font-bold text-[10px]">{formatLapTime(avgA)}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Driver B stats card */}
+                    <div className="bg-[#0e0f17] border border-[#212333] p-4 rounded-xl space-y-3 relative overflow-hidden" style={{ borderLeft: `4px solid ${strokeB}` }}>
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs font-black text-white uppercase truncate max-w-[130px]">{compareDriverB?.broadcast_name || "Driver B"}</span>
+                        <span className="text-[10px] font-mono text-gray-400 bg-white/5 py-0.5 px-2 rounded">{compareDriverB?.name_acronym}</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-center text-xs font-mono">
+                        <div className="bg-[#05060a] p-2 rounded">
+                          <span className="text-[8px] text-gray-500 uppercase block">Рекорд</span>
+                          <span className="text-white font-bold text-xs">{formatLapTime(minB)}</span>
+                        </div>
+                        <div className="bg-[#05060a] p-2 rounded">
+                          <span className="text-[8px] text-gray-500 uppercase block">Средний Pace</span>
+                          <span className="text-white font-bold text-[10px]">{formatLapTime(avgB)}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Delta comparison board */}
+                    <div className="bg-gradient-to-br from-[#1b1c2b] to-[#141520] border border-[#2d3142] p-4 rounded-xl flex-grow flex flex-col justify-center text-center space-y-2">
+                      <span className="text-[9px] uppercase font-black text-[#e10600] tracking-widest font-mono">Анализ разницы темпа</span>
+                      {minA && minB ? (
+                        <div className="space-y-1">
+                          <div className="text-xs font-black text-white uppercase tracking-tight">
+                            {minA < minB ? (
+                              <span>🏆 {compareDriverA?.name_acronym} быстрее на <span className="text-emerald-400 font-mono">{(minB - minA).toFixed(3)}с</span></span>
+                            ) : minA > minB ? (
+                              <span>🏆 {compareDriverB?.name_acronym} быстрее на <span className="text-emerald-400 font-mono">{(minA - minB).toFixed(3)}с</span></span>
+                            ) : (
+                              <span>Время рекордов совпадает!</span>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-gray-400 leading-normal font-sans">
+                            Разница по лучшим кругам. Сравнение среднего гоночного темпа: {avgA && avgB ? (
+                              `${compareDriverA?.name_acronym} (${formatLapTime(avgA)}) vs ${compareDriverB?.name_acronym} (${formatLapTime(avgB)})`
+                            ) : "—"}
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-gray-500 font-bold">Один из пилотов не имеет завершенных кругов в сессии</div>
+                      )}
+                    </div>
+
+                  </div>
+
+                </div>
+
+              </div>
+
+              {/* Footer */}
+              <div className="p-4 border-t border-[#212333] flex justify-end gap-3 bg-[#0d0e15]">
+                <button
+                  id="btn-close-compare-modal-footer"
+                  onClick={() => setIsCompareModalOpen(false)}
+                  className="px-5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-white font-black text-xs uppercase tracking-wider transition"
+                >
+                  Закрыть
+                </button>
+              </div>
+
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
     </div>
   );
