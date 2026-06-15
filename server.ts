@@ -522,10 +522,34 @@ ${eventsText}
 Пожалуйста, пиши профессионально, увлекательно, без сухих повторений. Не используй фразы вроде "как видно из предоставленных данных". Используй термины Формулы-1: апекс, деградация резины, прижимная сила, прогрев шин, DRS, undercut.
 `;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
-    });
+    let response;
+    let success = false;
+    let attempts = 0;
+    const maxAttempts = 2;
+
+    while (attempts < maxAttempts && !success) {
+      try {
+        response = await ai.models.generateContent({
+          model: "gemini-3.5-flash",
+          contents: prompt,
+        });
+        success = true;
+      } catch (err: any) {
+        attempts++;
+        console.warn(`[F1 AI Analyst] Attempt ${attempts} with gemini-3.5-flash failed (possibly 503 or 429):`, err?.message || err);
+        if (attempts < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 800));
+        }
+      }
+    }
+
+    if (!success) {
+      console.log("[F1 AI Analyst] Falling back to highly available gemini-3.1-flash-lite model to complete the telemetry report...");
+      response = await ai.models.generateContent({
+        model: "gemini-3.1-flash-lite",
+        contents: prompt,
+      });
+    }
 
     const analysisText = response.text || "Не удалось сгенерировать ИИ-обзор.";
     return res.json({ success: true, analysis: analysisText });
