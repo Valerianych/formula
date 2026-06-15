@@ -316,9 +316,18 @@ app.get("/api/session-data", async (req, res) => {
     }));
 
     // Deduplicate drivers
-    const uniqueDrivers = formattedDrivers.filter((driver, index, self) =>
+    let uniqueDrivers = formattedDrivers.filter((driver, index, self) =>
       index === self.findIndex((t) => t.driver_number === driver.driver_number)
     );
+
+    // If live API or deduplicated list is empty, inject standard Monaco fallback driver roster
+    if (uniqueDrivers.length === 0) {
+      console.warn("API OpenF1 returned 0 drivers for this sessions or was rate limited, injecting high-fidelity fallback roster.");
+      const fallbackData = MOCK_SESSIONS[9507];
+      if (fallbackData && fallbackData.drivers) {
+        uniqueDrivers = fallbackData.drivers;
+      }
+    }
 
     // Weather samples (take up to 10 spaced samples to keep payload fast)
     const rawWeather = Array.isArray(weatherRes) ? weatherRes : [];
@@ -395,7 +404,7 @@ app.get("/api/driver-laps", async (req, res) => {
     const resLaps = await fetchWithTimeout(url, 4000);
     if (resLaps.ok) {
       const data = await resLaps.json();
-      if (Array.isArray(data)) {
+      if (Array.isArray(data) && data.length > 0) {
         // Return clear lap logs
         const formattedLaps = data.map((l: any) => ({
           lap_number: l.lap_number,
@@ -404,8 +413,13 @@ app.get("/api/driver-laps", async (req, res) => {
           duration_sector_2: l.duration_sector_2 || null,
           duration_sector_3: l.duration_sector_3 || null,
           is_pit_out_lap: l.is_pit_out_lap === 1 || l.is_pit_out_lap === true,
-        }));
-        return res.json({ success: true, laps: formattedLaps });
+        })).filter(l => l.lap_duration && l.lap_duration > 0); // make sure we have valid durations
+        
+        if (formattedLaps.length > 0) {
+          return res.json({ success: true, laps: formattedLaps });
+        } else {
+          console.warn(`OpenF1 returned laps but none of them had valid durations for driver ${dNum}. Falling back...`);
+        }
       } else {
         console.warn(`OpenF1 returned non-array response for laps:`, data);
       }

@@ -7,9 +7,9 @@
   --font-mono: "JetBrains Mono", monospace;
   
   --color-f1-red: #FF1801;
-  --color-f1-dark: #0F0F14;
-  --color-f1-gray-dark: #16161F;
-  --color-f1-gray-light: #222230;
+  --color-f1-dark: #0a0d16;
+  --color-f1-gray-dark: #141724;
+  --color-f1-gray-light: #232b40;
   
   --animate-pulse-slow: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   --animate-float: float 4s ease-in-out infinite;
@@ -386,3 +386,147 @@ body {
 .theme-light ::-webkit-scrollbar-thumb:hover {
   background: #e10600 !important;
 }
+
+/* 🌌 LUMINOUS HIGH-CONTRAST DARK MODE OVERRIDES */
+.theme-dark {
+  background-color: #121520 !important;
+  color: #f1f5f9 !important;
+}
+
+/* Base text elements under dark mode */
+.theme-dark,
+.theme-dark .text-\[\#cfd2d6\],
+.theme-dark .text-\[\#c5c8cf\],
+.theme-dark .text-gray-300 {
+  color: #f1f5f9 !important; /* Brighter, clean slate-white instead of muddy dark grey */
+}
+
+.theme-dark .text-white {
+  color: #ffffff !important;
+}
+
+.theme-dark .text-gray-400 {
+  color: #cbd5e1 !important; /* Highly readable clean light slate-grey */
+}
+
+.theme-dark .text-gray-500 {
+  color: #94a3b8 !important; /* Visible helper text for effortless scanning */
+}
+
+/* Main card backgrounds in dark mode (mapped to gorgeous deep satin slate cards) */
+.theme-dark .bg-\[\#141520\],
+.theme-dark .bg-\[\#151622\],
+.theme-dark .bg-\[\#10111a\],
+.theme-dark .bg-\[\#151722\],
+.theme-dark .bg-\[\#151725\],
+.theme-dark .bg-\[\#171926\],
+.theme-dark .bg-\[\#14151f\],
+.theme-dark .bg-\[\#1a1d2c\],
+.theme-dark .carbon-card {
+  background-color: #1d2133 !important;
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+  border-color: #2c324e !important; /* Crisp soft borders instead of muddy dark frames */
+}
+
+/* Hover over cards */
+.theme-dark .hover\:bg-\[\#1b1c2b\]:hover,
+.theme-dark .hover\:bg-\[\#1f2133\]:hover {
+  background-color: #242a42 !important;
+}
+
+/* Selected driver chip highlight or active button background */
+.theme-dark .bg-\[\#1f2136\],
+.theme-dark [id^="tab-"].bg-\[\#e10600\] {
+  box-shadow: 0 0 20px rgba(225, 6, 0, 0.25) !important;
+}
+
+/* Deep nested wells inside dark mode (mapped to velvety dark fields) */
+.theme-dark .bg-\[\#090a0f\],
+.theme-dark .bg-\[\#0e0f17\],
+.theme-dark .bg-\[\#0d0e15\],
+.theme-dark .bg-\[\#1a1b24\],
+.theme-dark .bg-\[\#161824\],
+.theme-dark .bg-\[\#090a0f\]\/80 {
+  background-color: #161928 !important;
+  border-color: #2c324e !important;
+}
+
+/* Deepest nested cards */
+.theme-dark .bg-\[\#05060a\],
+.theme-dark .bg-\[\#05060b\] {
+  background-color: #131622 !important;
+  border-color: #242940 !important;
+}
+
+/* Semi-transparent/overlay outer wraps in dark mode */
+.theme-dark .bg-\[\#11131e\]\/40,
+.theme-dark .bg-\[\#14151f\]\/50,
+.theme-dark .bg-\[\#14151f\]\/30,
+.theme-dark .bg-\[\#14151f\]\/80,
+.theme-dark .bg-\[\#0a0b10\]\/60 {
+  background-color: rgba(22, 25, 40, 0.9) !important;
+}
+
+/* Velvet borders in dark mode */
+.theme-dark .border-\[\#2c2f44\],
+.theme-dark .border-\[\#212333\],
+.theme-dark .border-\[\#1c1d29\],
+.theme-dark .border-\[\#252836\],
+.theme-dark .border-\[\#2a2d41\],
+.theme-dark .border-\[\#26283b\],
+.theme-dark .border-\[\#2d3142\],
+.theme-dark .border-\[\#1b1c2b\],
+.theme-dark .border-\[\#292c3f\] {
+  border-color: #2c324e !important;
+}
+
+.theme-dark .border-\[\#212333\]\/70,
+.theme-dark .border-\[\#212333\]\/60,
+.theme-dark .border-\[\#212333\]\/40,
+.theme-dark .border-\[\#212333\]\/45,
+.theme-dark .border-\[\#2c2f44\]\/50 {
+  border-color: rgba(44, 50, 78, 0.6) !important;
+}
+
+/* Form items style in dark mode */
+.theme-dark select,
+.theme-dark input,
+.theme-dark textarea {
+  color: #ffffff !important;
+  background-color: #131622 !important;
+  border-color: #2c324e !important;
+}
+
+.theme-dark select:focus,
+.theme-dark input:focus,
+.theme-dark textarea:focus {
+  border-color: #e10600 !important;
+}
+
+.theme-dark select option {
+  background-color: #131622 !important;
+  color: #ffffff !important;
+}
+
+/* Recharts grid colors in dark mode */
+.theme-dark .recharts-cartesian-grid-horizontal line,
+.theme-dark .recharts-cartesian-grid-vertical line {
+  stroke: #2c324e !important;
+}
+
+.theme-dark .recharts-text {
+  fill: #cbd5e1 !important;
+}
+
+/* Header background in dark mode */
+.theme-dark header.bg-gradient-to-b.from-\[\#14151c\].to-\[\#0d0e12\] {
+  background-image: linear-gradient(to bottom, #181d2f, #121520) !important;
+  border-bottom: 1px solid #2c324e !important;
+}
+
+.theme-dark footer.bg-black {
+  background-color: #131622 !important;
+  border-top: 1px solid #2c324e !important;
+  color: #cbd5e1 !important;
+}
+

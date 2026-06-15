@@ -805,20 +805,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* SUB-HEADER TIP BANNER */}
-      <div className="bg-[#101116] border-b border-[#222533] py-2 px-6 text-xs text-gray-400">
-        <div className="max-w-[1720px] mx-auto flex flex-col md:flex-row md:items-center justify-between gap-2">
-          <div className="flex items-center gap-2 font-medium">
-            <Sparkles className="w-4 h-4 text-[#e10600] animate-pulse shrink-0" />
-            <span>
-              <strong className="text-white">Актуальные данные 2025/2026:</strong> Сезонные зачеты и результаты этапов загружаются напрямую через протоколы <strong className="text-white">Jolpica F1 API</strong>. Нет ограничений старыми архивами!
-            </span>
-          </div>
-          <div className="flex items-center gap-3 text-[10px] font-mono text-gray-400 tracking-wide bg-[#161824] px-2 py-0.5 rounded border border-[#2d3142]">
-            <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> ONLINE LIVE</span>
-          </div>
-        </div>
-      </div>
+
 
       <main className="flex-grow max-w-[1720px] mx-auto w-full p-4 sm:p-6 lg:p-8 flex flex-col gap-6">
 
@@ -852,17 +839,17 @@ export default function App() {
 
               {/* Year Choose */}
               <div className="xl:col-span-3 space-y-2 relative z-10">
-                <label className="text-[10px] uppercase font-black text-[#e10600] tracking-widest flex items-center gap-1.5">
-                  <Calendar className="w-3.5 h-3.5" /> Выберите Сезон гонок
+                <label className="text-[11px] font-semibold text-gray-450 tracking-wide flex items-center gap-1.5 uppercase select-none">
+                  <Calendar className="w-3.5 h-3.5 text-[#e10600]" /> Сезон гонок
                 </label>
                 <div className="grid grid-cols-4 gap-1.5 bg-[#090a0f] p-1.5 rounded-xl border border-[#2c2f44]">
                   {[2026, 2025, 2024, 2023].map((yr) => (
                     <button
                       key={yr}
                       onClick={() => setSelectedYear(yr)}
-                      className={`py-1.5 text-[11px] font-black rounded-lg transition-all tracking-wider ${
+                      className={`py-1.5 text-[11px] font-bold rounded-lg transition-all tracking-wider ${
                         selectedYear === yr
-                          ? "bg-[#e10600] text-white font-bold shadow-md"
+                          ? "bg-[#e10600] text-white shadow-md"
                           : "text-gray-400 hover:text-white"
                       }`}
                     >
@@ -874,8 +861,8 @@ export default function App() {
 
               {/* Selector box */}
               <div className="xl:col-span-5 space-y-2 relative z-10">
-                <label className="text-[10px] uppercase font-black text-gray-400 tracking-widest flex items-center gap-1.5">
-                  <Flag className="w-3.5 h-3.5 text-[#e10600]" /> Выберите Этап / Гран-При
+                <label className="text-[11px] font-semibold text-gray-450 tracking-wide flex items-center gap-1.5 uppercase select-none">
+                  <Flag className="w-3.5 h-3.5 text-[#e10600]" /> Этап / Гран-При
                 </label>
                 {sessionsLoading ? (
                   <div className="h-10 bg-[#090a0f] rounded-xl animate-pulse flex items-center justify-center border border-[#26283b]">
@@ -928,73 +915,61 @@ export default function App() {
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               
               {/* BEST LAP */}
-              <div className="bg-[#14151f] p-4 rounded-xl border border-[#212333] relative overflow-hidden group">
-                <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider flex items-center gap-2 mb-1.5">
+              <div className="bg-[#14151f] p-5 rounded-xl border border-[#212333] relative overflow-hidden transition duration-150">
+                <span className="text-[11px] font-semibold text-gray-450 tracking-wide flex items-center gap-2 mb-2">
                   <Clock className="w-4 h-4 text-[#e10600]" /> Рекорд круга пилота
                 </span>
-                <span className="text-xl sm:text-2xl font-black font-mono tracking-tight text-white block">
+                <span className="text-xl sm:text-2xl font-bold font-mono tracking-tight text-white block">
                   {formatLapTime(bestLapTime)}
                 </span>
-                <span className="text-[9px] text-[#e10600] font-mono mt-2 block font-black uppercase">
+                <span className="text-[10px] text-[#e10600] font-mono mt-2 block font-semibold uppercase">
                   {selectedDriver ? `ПОКАЗАТЕЛЬ: ${selectedDriver.name_acronym}` : "Нет заездов"}
                 </span>
-                <div className="absolute right-4 bottom-1 text-[#e10600]/5 font-mono font-black italic text-4xl select-none pointer-events-none">
-                  BEST
-                </div>
               </div>
 
               {/* MEDIAN TEMPO */}
-              <div className="bg-[#14151f] p-4 rounded-xl border border-[#212333] relative overflow-hidden group">
-                <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider flex items-center gap-2 mb-1.5">
+              <div className="bg-[#14151f] p-5 rounded-xl border border-[#212333] relative overflow-hidden transition duration-150">
+                <span className="text-[11px] font-semibold text-gray-450 tracking-wide flex items-center gap-2 mb-2">
                   <TrendingUp className="w-4 h-4 text-cyan-400" /> Средний гоночный Pace
                 </span>
-                <span className="text-xl sm:text-2xl font-black font-mono tracking-tight text-white block">
+                <span className="text-xl sm:text-2xl font-bold font-mono tracking-tight text-white block">
                   {formatLapTime(avgLapTime)}
                 </span>
-                <span className="text-[9px] text-gray-400 font-mono mt-2 block uppercase font-bold">
-                  Выносливость шин / старт-финиш
+                <span className="text-[10px] text-gray-400 font-mono mt-2 block uppercase font-medium">
+                  Выносливость шин / темп
                 </span>
-                <div className="absolute right-4 bottom-1 text-cyan-400/5 font-mono font-black italic text-4xl select-none pointer-events-none">
-                  PACE
-                </div>
               </div>
 
               {/* TRACK THERMOMETER */}
-              <div className="bg-[#14151f] p-4 rounded-xl border border-[#212333] relative overflow-hidden">
-                <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider flex items-center gap-2 mb-1.5">
-                  <Gauge className="w-4 h-4 text-orange-400" /> Асфальт / Градусники
+              <div className="bg-[#14151f] p-5 rounded-xl border border-[#212333] relative overflow-hidden transition duration-150">
+                <span className="text-[11px] font-semibold text-gray-450 tracking-wide flex items-center gap-2 mb-2">
+                  <Gauge className="w-4 h-4 text-orange-450" /> Асфальт / Градусники
                 </span>
-                <span className="text-xl sm:text-2xl font-black font-mono tracking-tight text-white block">
+                <span className="text-xl sm:text-2xl font-bold font-mono tracking-tight text-white block">
                   {weatherData.length > 0 
                     ? `${weatherData[weatherData.length - 1].track_temperature.toFixed(1)}°C` 
                     : "35.2°C"
                   }
                 </span>
-                <span className="text-[9px] text-gray-400 font-mono mt-2 block uppercase font-bold">
+                <span className="text-[10px] text-gray-400 font-mono mt-2 block uppercase font-medium">
                   Воздух: {weatherData.length > 0 ? `${weatherData[weatherData.length - 1].air_temperature.toFixed(1)}°C` : "21.6°C"}
                 </span>
-                <div className="absolute right-4 bottom-1 text-orange-400/5 font-mono font-black italic text-4xl select-none pointer-events-none">
-                  TEMP
-                </div>
               </div>
 
               {/* MOISTURE / WET GRIP */}
-              <div className="bg-[#14151f] p-4 rounded-xl border border-[#212333] relative overflow-hidden">
-                <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider flex items-center gap-2 mb-1.5">
-                  <CloudSun className="w-4 h-4 text-[#ffcc00]" /> Состояние трассы
+              <div className="bg-[#14151f] p-5 rounded-xl border border-[#212333] relative overflow-hidden transition duration-150">
+                <span className="text-[11px] font-semibold text-gray-450 tracking-wide flex items-center gap-2 mb-2">
+                  <CloudSun className="w-4 h-4 text-yellow-400" /> Состояние трассы
                 </span>
-                <span className="text-xl sm:text-2xl font-black font-mono tracking-tight text-white block">
+                <span className="text-xl sm:text-2xl font-bold font-mono tracking-tight text-white block">
                   {weatherData.length > 0 
                     ? (weatherData[weatherData.length - 1].rainfall > 0 ? "🌧️ Дождь" : "☀️ Сухо") 
                     : "☀️ Сухо"
                   }
                 </span>
-                <span className="text-[9px] text-gray-400 font-mono mt-2 block uppercase font-bold">
+                <span className="text-[10px] text-gray-400 font-mono mt-2 block uppercase font-medium">
                   Влажность: {weatherData.length > 0 ? `${weatherData[weatherData.length - 1].humidity}%` : "54%"}
                 </span>
-                <div className="absolute right-4 bottom-1 text-yellow-400/5 font-mono font-black italic text-4xl select-none pointer-events-none">
-                  WET
-                </div>
               </div>
 
             </div>
@@ -1003,8 +978,8 @@ export default function App() {
             <div className="space-y-3 bg-[#11131e]/40 p-4 sm:p-5 rounded-2xl border border-[#212333]/60">
               <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 border-b border-[#212333]/45 pb-3">
                 <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-                  <h3 className="text-xs font-black uppercase text-[#e10600] tracking-widest flex items-center gap-2">
-                    <Users className="w-4 h-4" /> Шаг 2: Выберите пилота для построения графиков
+                  <h3 className="text-xs font-semibold uppercase text-gray-300 tracking-wider flex items-center gap-2">
+                    <Users className="w-4 h-4 text-[#e10600]" /> Выберите пилота для построения графиков
                   </h3>
                   
                   {/* Search input field */}
