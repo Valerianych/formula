@@ -1,270 +1,404 @@
 (() => {
-  const STYLE_ID = "f1-visual-fixes-style";
-  const PANEL_ID = "f1-winner-spotlight";
-  let lastSessionKey = "";
-  let lastYear = "";
-  let sessionsCache = new Map();
+  const YEARS = [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018];
+  let state = {
+    year: 2025,
+    races: [],
+    standings: { drivers: [], constructors: [] },
+    sessions: [],
+    selectedSessionKey: "",
+    sessionData: null,
+    selectedDriverNumber: "",
+    laps: [],
+    loading: false,
+    error: "",
+  };
 
-  function addStyles() {
-    if (document.getElementById(STYLE_ID)) return;
-    const style = document.createElement("style");
-    style.id = STYLE_ID;
-    style.textContent = `
-      #${PANEL_ID} {
-        position: fixed;
-        top: 86px;
-        right: 24px;
-        z-index: 99999;
-        width: min(420px, calc(100vw - 32px));
-        background: linear-gradient(135deg, rgba(225, 6, 0, 0.98), rgba(105, 0, 0, 0.98));
-        border: 1px solid rgba(255,255,255,0.24);
-        border-radius: 20px;
-        box-shadow: 0 22px 70px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.08) inset;
-        color: #fff;
-        padding: 18px 20px;
+  function css() {
+    return `
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: #080a12;
+        color: #f5f7fb;
         font-family: Inter, Arial, sans-serif;
-        transform: translateZ(0);
       }
-      #${PANEL_ID} .f1-label {
-        font-size: 11px;
-        line-height: 1;
-        text-transform: uppercase;
-        letter-spacing: 0.12em;
-        font-weight: 900;
-        opacity: 0.78;
-        margin-bottom: 10px;
+      .api-app {
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at top right, rgba(225,6,0,.18), transparent 34%),
+          linear-gradient(180deg, #10121d 0%, #080a12 100%);
       }
-      #${PANEL_ID} .f1-winner {
-        font-size: 25px;
-        line-height: 1.12;
+      .api-header {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 18px;
+        padding: 18px 28px;
+        background: rgba(12, 14, 24, .94);
+        border-bottom: 1px solid #25283a;
+        backdrop-filter: blur(10px);
+      }
+      .brand { display: flex; align-items: center; gap: 14px; }
+      .logo {
+        width: 52px;
+        height: 52px;
+        border-radius: 12px;
+        background: #e10600;
+        display: grid;
+        place-items: center;
+        font-weight: 1000;
+        font-size: 22px;
+        font-style: italic;
+      }
+      .brand h1 { margin: 0; font-size: 22px; line-height: 1; font-style: italic; }
+      .brand p { margin: 6px 0 0; color: #aeb5c8; font-size: 12px; font-weight: 800; }
+      .source-badge {
+        border: 1px solid rgba(225,6,0,.45);
+        background: rgba(225,6,0,.12);
+        color: #fff;
+        border-radius: 999px;
+        padding: 10px 14px;
+        font-size: 12px;
         font-weight: 1000;
         text-transform: uppercase;
-        margin-bottom: 8px;
       }
-      #${PANEL_ID} .f1-race {
-        font-size: 13px;
-        line-height: 1.35;
-        font-weight: 800;
-        opacity: 0.95;
+      .wrap { max-width: 1480px; margin: 0 auto; padding: 28px; }
+      .panel {
+        background: rgba(22, 25, 40, .92);
+        border: 1px solid #2a2e45;
+        border-radius: 22px;
+        box-shadow: 0 18px 50px rgba(0,0,0,.22);
       }
-      #${PANEL_ID} .f1-meta {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        margin-top: 12px;
-      }
-      #${PANEL_ID} .f1-pill {
-        background: rgba(0,0,0,0.24);
-        border: 1px solid rgba(255,255,255,0.20);
-        border-radius: 999px;
-        padding: 6px 9px;
-        font-size: 11px;
-        font-weight: 900;
-      }
-      #${PANEL_ID} .f1-close {
-        position: absolute;
-        top: 8px;
-        right: 10px;
-        border: 0;
-        color: white;
-        background: rgba(0,0,0,0.18);
-        width: 24px;
-        height: 24px;
-        border-radius: 999px;
+      .controls { padding: 18px; margin-bottom: 22px; }
+      .year-row { display: flex; flex-wrap: wrap; gap: 8px; }
+      .year-btn {
+        border: 1px solid #2c3048;
+        background: #0c0f1a;
+        color: #cfd5e7;
+        border-radius: 12px;
+        padding: 10px 14px;
         cursor: pointer;
+        font-size: 13px;
+        font-weight: 1000;
+      }
+      .year-btn.active, .year-btn:hover { background: #e10600; color: #fff; border-color: #e10600; }
+      .grid { display: grid; gap: 18px; }
+      .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .card { padding: 20px; }
+      .label { color: #9ea8c6; text-transform: uppercase; font-size: 11px; letter-spacing: .08em; font-weight: 1000; margin-bottom: 10px; }
+      .big { font-size: 30px; font-weight: 1000; line-height: 1.1; }
+      .red { color: #ff2b24; }
+      .muted { color: #aab2ca; font-size: 13px; line-height: 1.45; }
+      .winner-card {
+        background: linear-gradient(135deg, #e10600 0%, #690000 100%);
+        border-color: rgba(255,255,255,.22);
+      }
+      .winner-card .label, .winner-card .muted { color: rgba(255,255,255,.82); }
+      .winner-name { font-size: 34px; font-weight: 1000; line-height: 1.08; margin: 8px 0; }
+      .pill-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+      .pill { background: rgba(0,0,0,.25); border: 1px solid rgba(255,255,255,.18); border-radius: 999px; padding: 7px 10px; font-size: 12px; font-weight: 900; }
+      .section-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 28px 0 12px; }
+      .section-title h2 { margin: 0; font-size: 18px; text-transform: uppercase; letter-spacing: .04em; }
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      th, td { padding: 12px 10px; border-bottom: 1px solid #25293e; text-align: left; }
+      th { color: #8f9abb; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+      td:last-child, th:last-child { text-align: right; }
+      .race-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+      .race-item { padding: 15px; background: #0d101b; border: 1px solid #25293e; border-radius: 16px; }
+      .race-item .race-name { color: #fff; font-weight: 1000; font-size: 14px; line-height: 1.25; }
+      .race-item .winner { margin-top: 10px; color: #fff; font-weight: 1000; }
+      .race-item .team { color: #ff3830; font-size: 12px; font-weight: 900; }
+      select {
+        width: 100%;
+        border: 1px solid #333851;
+        background: #090b13;
+        color: #fff;
+        border-radius: 14px;
+        padding: 13px 14px;
         font-weight: 900;
+        outline: none;
       }
-      .f1-api-note {
-        position: fixed;
-        bottom: 16px;
-        right: 16px;
-        z-index: 99998;
-        background: rgba(10, 12, 20, 0.94);
-        color: #cfd2d6;
-        border: 1px solid rgba(225,6,0,0.35);
-        border-radius: 999px;
-        padding: 8px 12px;
-        font: 800 11px Inter, Arial, sans-serif;
-        letter-spacing: .03em;
-        box-shadow: 0 10px 30px rgba(0,0,0,.35);
-      }
-      @media (max-width: 700px) {
-        #${PANEL_ID} { top: 76px; right: 12px; left: 12px; width: auto; }
-      }
+      .driver-row { display: flex; gap: 8px; flex-wrap: wrap; }
+      .driver-btn { border: 1px solid #30354f; background: #0d101b; color: #fff; border-radius: 12px; padding: 10px 12px; cursor: pointer; font-weight: 1000; }
+      .driver-btn.active, .driver-btn:hover { border-color: #e10600; background: #1d2134; }
+      .bar { height: 10px; border-radius: 999px; background: #24293d; overflow: hidden; margin-top: 8px; }
+      .bar span { display: block; height: 100%; background: #e10600; }
+      .error { border: 1px solid rgba(255,180,0,.28); background: rgba(255,180,0,.08); color: #ffd782; padding: 14px 16px; border-radius: 14px; margin-bottom: 18px; font-weight: 800; }
+      .loading { padding: 28px; color: #aeb5c8; font-weight: 900; }
+      @media (max-width: 1000px) { .grid-3, .grid-2, .race-list { grid-template-columns: 1fr; } .api-header { flex-direction: column; align-items: flex-start; } }
     `;
-    document.head.appendChild(style);
   }
 
-  function getRaceSelect() {
-    const selects = Array.from(document.querySelectorAll("select"));
-    return selects.find((select) => {
-      const text = Array.from(select.options).map((option) => option.textContent || "").join(" ").toLowerCase();
-      return text.includes("grand prix") || text.includes("race") || text.includes("гран-при");
-    });
+  function getRoot() {
+    const root = document.getElementById("root") || document.body;
+    root.innerHTML = `<style>${css()}</style><div class="api-app"><div class="loading">Загрузка данных с API...</div></div>`;
+    return root;
   }
 
-  function getYearFromPage(select) {
-    const selectedText = select?.selectedOptions?.[0]?.textContent || "";
-    const fromSelected = selectedText.match(/20\d{2}/)?.[0];
-    if (fromSelected) return fromSelected;
-
-    const bodyText = document.body.innerText || "";
-    const years = bodyText.match(/20\d{2}/g) || [];
-    return years[0] || String(new Date().getFullYear());
-  }
-
-  async function fetchJson(url) {
-    const response = await fetch(url, { cache: "no-store" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  async function api(url) {
+    const response = await fetch(`${url}${url.includes("?") ? "&" : "?"}_=${Date.now()}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
     return response.json();
   }
 
-  async function loadSessions(year) {
-    if (String(year) === lastYear && sessionsCache.size > 0) return sessionsCache;
-    const payload = await fetchJson(`/api/sessions?year=${encodeURIComponent(year)}&visual=1`);
-    const map = new Map();
-    for (const session of payload.sessions || []) {
-      if (session?.session_key) map.set(String(session.session_key), session);
-    }
-    sessionsCache = map;
-    lastYear = String(year);
-    return map;
+  function fmt(value) {
+    if (value === null || value === undefined || value === "") return "—";
+    return String(value);
   }
 
-  function formatSessionOption(session) {
-    const raceName = String(session.meeting_name || "Гонка").replace(/\s*\(20\d{2}\)\s*$/, "");
-    const winner = session.winner || "победитель не найден";
-    const team = session.winnerTeam ? ` (${session.winnerTeam})` : "";
-    return `🏁 ${raceName} — 🥇 ${winner}${team}`;
+  function fmtLap(seconds) {
+    if (!seconds) return "—";
+    const min = Math.floor(seconds / 60);
+    const sec = (seconds % 60).toFixed(3).padStart(6, "0");
+    return `${min}:${sec}`;
   }
 
-  async function cleanSelector(select, year) {
-    const map = await loadSessions(year);
-    if (!map.size) return;
+  function lastWeather() {
+    const weather = state.sessionData?.weather || [];
+    return weather.length ? weather[weather.length - 1] : null;
+  }
 
-    const options = Array.from(select.options);
-    for (const option of options) {
-      const session = map.get(String(option.value));
-      if (session) {
-        option.textContent = formatSessionOption(session);
-        option.hidden = false;
-        option.disabled = false;
-      } else {
-        option.hidden = true;
-        option.disabled = true;
+  function lapStats() {
+    const valid = state.laps.filter((lap) => lap.lap_duration && lap.lap_duration > 0);
+    if (!valid.length) return { best: null, avg: null, count: 0 };
+    const values = valid.map((lap) => lap.lap_duration);
+    return {
+      best: Math.min(...values),
+      avg: values.reduce((sum, item) => sum + item, 0) / values.length,
+      count: valid.length,
+    };
+  }
+
+  async function loadAll() {
+    state.loading = true;
+    state.error = "";
+    render();
+
+    try {
+      const [results, standings, sessions] = await Promise.all([
+        api(`/api/results?year=${state.year}`),
+        api(`/api/standings?year=${state.year}`),
+        api(`/api/sessions?year=${state.year}`),
+      ]);
+
+      state.races = results.races || [];
+      state.standings = { drivers: standings.drivers || [], constructors: standings.constructors || [] };
+      state.sessions = sessions.sessions || [];
+
+      if (!state.selectedSessionKey || !state.sessions.some((item) => String(item.session_key) === String(state.selectedSessionKey))) {
+        state.selectedSessionKey = state.sessions[0]?.session_key ? String(state.sessions[0].session_key) : "";
       }
-    }
 
-    if (!map.has(String(select.value))) {
-      const first = Array.from(select.options).find((option) => !option.disabled && !option.hidden);
-      if (first) {
-        select.value = first.value;
-        select.dispatchEvent(new Event("input", { bubbles: true }));
-        select.dispatchEvent(new Event("change", { bubbles: true }));
-      }
+      await loadSession();
+    } catch (error) {
+      state.error = `API не ответил: ${error.message}`;
+      state.races = [];
+      state.standings = { drivers: [], constructors: [] };
+      state.sessions = [];
+      state.sessionData = null;
+      state.laps = [];
+    } finally {
+      state.loading = false;
+      render();
     }
   }
 
-  function buildWinnerFromSessionData(data) {
-    const session = data?.data?.session;
+  async function loadSession() {
+    state.sessionData = null;
+    state.laps = [];
+    state.selectedDriverNumber = "";
+
+    if (!state.selectedSessionKey) return;
+
+    const data = await api(`/api/session-data?session_key=${state.selectedSessionKey}`);
+    state.sessionData = data.data || null;
+
+    const firstDriver = state.sessionData?.drivers?.[0];
+    if (firstDriver?.driver_number) {
+      state.selectedDriverNumber = String(firstDriver.driver_number);
+      await loadLaps();
+    }
+  }
+
+  async function loadLaps() {
+    state.laps = [];
+    if (!state.selectedSessionKey || !state.selectedDriverNumber) return;
+    const data = await api(`/api/driver-laps?session_key=${state.selectedSessionKey}&driver_number=${state.selectedDriverNumber}`);
+    state.laps = data.laps || [];
+  }
+
+  function selectedRace() {
+    return state.races[0] || null;
+  }
+
+  function selectedSessionWinner() {
+    const session = state.sessionData?.session;
     if (!session) return null;
+    if (session.winner) return { winner: session.winner, team: session.winnerTeam, time: session.winnerTime, race: session.meeting_name };
 
-    if (session.winner) {
-      return {
-        winner: session.winner,
-        team: session.winnerTeam || "команда не указана",
-        time: session.winnerTime || "время не указано",
-        race: String(session.meeting_name || "Выбранная гонка").replace(/ - winner:.*/i, ""),
-        place: [session.location, session.country_name].filter(Boolean).join(", "),
-      };
-    }
-
-    const resultEvent = (data?.data?.events || []).find((event) => String(event.category || "").toLowerCase() === "result");
-    if (resultEvent?.message) {
-      return {
-        winner: resultEvent.message,
-        team: "данные результата",
-        time: "из API",
-        race: session.meeting_name || "Выбранная гонка",
-        place: [session.location, session.country_name].filter(Boolean).join(", "),
-      };
-    }
-
-    return null;
+    const event = (state.sessionData?.events || []).find((item) => String(item.category || "").toLowerCase() === "result");
+    if (!event) return null;
+    return { winner: event.message, team: "из API", time: "—", race: session.meeting_name };
   }
 
-  function renderPanel(info, sourceText) {
-    if (!info) return;
-    addStyles();
+  function render() {
+    const root = getRoot();
+    const race = selectedRace();
+    const weather = lastWeather();
+    const stats = lapStats();
+    const sessionWinner = selectedSessionWinner();
 
-    let panel = document.getElementById(PANEL_ID);
-    if (!panel) {
-      panel = document.createElement("div");
-      panel.id = PANEL_ID;
-      document.body.appendChild(panel);
-    }
+    root.querySelector(".api-app").innerHTML = `
+      <header class="api-header">
+        <div class="brand">
+          <div class="logo">F1</div>
+          <div>
+            <h1>F1 ANALYTICS DECK</h1>
+            <p>Все данные идут через OpenF1 API и Jolpica API. Демо-значения не используются.</p>
+          </div>
+        </div>
+        <div class="source-badge">API ONLY</div>
+      </header>
 
-    panel.innerHTML = `
-      <button class="f1-close" title="Скрыть">×</button>
-      <div class="f1-label">Победитель выбранной гонки</div>
-      <div class="f1-winner">🥇 ${escapeHtml(info.winner)}</div>
-      <div class="f1-race">${escapeHtml(info.race)}</div>
-      <div class="f1-meta">
-        <span class="f1-pill">Команда: ${escapeHtml(info.team)}</span>
-        <span class="f1-pill">Место: ${escapeHtml(info.place || "не указано")}</span>
-        <span class="f1-pill">Источник: ${escapeHtml(sourceText || "API")}</span>
-      </div>
+      <main class="wrap">
+        ${state.error ? `<div class="error">${state.error}</div>` : ""}
+        <section class="panel controls">
+          <div class="label">Сезон</div>
+          <div class="year-row">
+            ${YEARS.map((year) => `<button class="year-btn ${year === state.year ? "active" : ""}" data-year="${year}">${year}</button>`).join("")}
+          </div>
+        </section>
+
+        ${state.loading ? `<div class="panel loading">Загрузка реальных данных с API...</div>` : ""}
+
+        <section class="grid grid-3">
+          <div class="panel card winner-card">
+            <div class="label">Последняя гонка с результатом API</div>
+            <div class="winner-name">🥇 ${fmt(race?.winner)}</div>
+            <div class="muted">${fmt(race?.raceName)} · ${fmt(race?.locality)}, ${fmt(race?.country)}</div>
+            <div class="pill-row">
+              <span class="pill">Команда: ${fmt(race?.winnerTeam)}</span>
+              <span class="pill">Время: ${fmt(race?.time)}</span>
+            </div>
+          </div>
+
+          <div class="panel card">
+            <div class="label">Лидер личного зачёта</div>
+            <div class="big">${fmt(state.standings.drivers?.[0]?.driverName)}</div>
+            <div class="muted">${fmt(state.standings.drivers?.[0]?.teamName)} · ${fmt(state.standings.drivers?.[0]?.points)} очков · побед: ${fmt(state.standings.drivers?.[0]?.wins)}</div>
+          </div>
+
+          <div class="panel card">
+            <div class="label">Лидер кубка конструкторов</div>
+            <div class="big">${fmt(state.standings.constructors?.[0]?.teamName)}</div>
+            <div class="muted">${fmt(state.standings.constructors?.[0]?.points)} очков · побед: ${fmt(state.standings.constructors?.[0]?.wins)}</div>
+          </div>
+        </section>
+
+        <div class="section-title"><h2>Телеметрия выбранной гонки</h2><span class="muted">Источник: /api/sessions, /api/session-data, /api/driver-laps</span></div>
+        <section class="panel card">
+          <div class="grid grid-2">
+            <div>
+              <div class="label">Выберите этап из OpenF1</div>
+              <select id="session-select">
+                ${state.sessions.length ? state.sessions.map((item) => `<option value="${item.session_key}" ${String(item.session_key) === String(state.selectedSessionKey) ? "selected" : ""}>${fmt(item.meeting_name)} — ${fmt(item.session_name)}</option>`).join("") : `<option>API не вернул завершённые гонки</option>`}
+              </select>
+              ${sessionWinner ? `<div class="pill-row"><span class="pill">Победитель: ${fmt(sessionWinner.winner)}</span><span class="pill">Команда: ${fmt(sessionWinner.team)}</span></div>` : ""}
+            </div>
+            <div>
+              <div class="label">Погода из OpenF1</div>
+              <div class="big">${weather ? `${fmt(weather.track_temperature)}°C` : "—"}</div>
+              <div class="muted">Воздух: ${weather ? `${fmt(weather.air_temperature)}°C` : "—"} · Влажность: ${weather ? `${fmt(weather.humidity)}%` : "—"} · Осадки: ${weather ? fmt(weather.rainfall) : "—"}</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="grid grid-3" style="margin-top:18px">
+          <div class="panel card">
+            <div class="label">Лучший круг выбранного пилота</div>
+            <div class="big">${fmtLap(stats.best)}</div>
+            <div class="muted">Круги загружены из OpenF1: ${stats.count}</div>
+          </div>
+          <div class="panel card">
+            <div class="label">Средний темп</div>
+            <div class="big">${fmtLap(stats.avg)}</div>
+            <div class="muted">Считается только по кругам, пришедшим из API.</div>
+          </div>
+          <div class="panel card">
+            <div class="label">Пилоты из API</div>
+            <div class="driver-row">
+              ${(state.sessionData?.drivers || []).slice(0, 10).map((driver) => `<button class="driver-btn ${String(driver.driver_number) === String(state.selectedDriverNumber) ? "active" : ""}" data-driver="${driver.driver_number}">${fmt(driver.name_acronym)} · ${fmt(driver.full_name)}</button>`).join("") || `<span class="muted">Пилоты не пришли из API</span>`}
+            </div>
+          </div>
+        </section>
+
+        <div class="section-title"><h2>Победители гонок</h2><span class="muted">Источник: Jolpica /results/1.json</span></div>
+        <section class="race-list">
+          ${state.races.length ? state.races.map((item) => `
+            <div class="race-item">
+              <div class="muted">Раунд ${fmt(item.round)} · ${fmt(item.date)}</div>
+              <div class="race-name">${fmt(item.raceName)}</div>
+              <div class="winner">🥇 ${fmt(item.winner)}</div>
+              <div class="team">${fmt(item.winnerTeam)}</div>
+              <div class="muted">${fmt(item.circuitName)} · ${fmt(item.locality)}, ${fmt(item.country)}</div>
+            </div>
+          `).join("") : `<div class="panel card muted">Jolpica API не вернул победителей за выбранный сезон.</div>`}
+        </section>
+
+        <div class="section-title"><h2>Личный зачёт и команды</h2><span class="muted">Источник: Jolpica standings</span></div>
+        <section class="grid grid-2">
+          <div class="panel card">
+            <div class="label">Пилоты</div>
+            <table>
+              <thead><tr><th>Поз.</th><th>Пилот</th><th>Команда</th><th>Очки</th></tr></thead>
+              <tbody>${state.standings.drivers.length ? state.standings.drivers.map((d) => `<tr><td>${fmt(d.position)}</td><td>${fmt(d.driverName)}</td><td>${fmt(d.teamName)}</td><td>${fmt(d.points)}</td></tr>`).join("") : `<tr><td colspan="4">API не вернул таблицу пилотов</td></tr>`}</tbody>
+            </table>
+          </div>
+          <div class="panel card">
+            <div class="label">Команды</div>
+            <table>
+              <thead><tr><th>Поз.</th><th>Команда</th><th>Победы</th><th>Очки</th></tr></thead>
+              <tbody>${state.standings.constructors.length ? state.standings.constructors.map((d) => `<tr><td>${fmt(d.position)}</td><td>${fmt(d.teamName)}</td><td>${fmt(d.wins)}</td><td>${fmt(d.points)}</td></tr>`).join("") : `<tr><td colspan="4">API не вернул таблицу команд</td></tr>`}</tbody>
+            </table>
+          </div>
+        </section>
+      </main>
     `;
 
-    panel.querySelector(".f1-close")?.addEventListener("click", () => panel.remove());
-  }
+    root.querySelectorAll(".year-btn").forEach((button) => {
+      button.addEventListener("click", async () => {
+        state.year = Number(button.dataset.year);
+        state.selectedSessionKey = "";
+        await loadAll();
+      });
+    });
 
-  function renderApiNote(text) {
-    let note = document.querySelector(".f1-api-note");
-    if (!note) {
-      note = document.createElement("div");
-      note.className = "f1-api-note";
-      document.body.appendChild(note);
+    const sessionSelect = root.querySelector("#session-select");
+    if (sessionSelect) {
+      sessionSelect.addEventListener("change", async (event) => {
+        state.selectedSessionKey = event.target.value;
+        await loadSession();
+        render();
+      });
     }
-    note.textContent = text;
-  }
 
-  function escapeHtml(value) {
-    return String(value || "")
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#039;");
-  }
-
-  async function updateVisuals() {
-    const select = getRaceSelect();
-    if (!select) return;
-
-    const year = getYearFromPage(select);
-    await cleanSelector(select, year).catch(() => null);
-
-    const key = String(select.value || "");
-    if (!key || key === lastSessionKey) return;
-    lastSessionKey = key;
-
-    const sessionPayload = await fetchJson(`/api/session-data?session_key=${encodeURIComponent(key)}&visual=1`).catch(() => null);
-    const winnerInfo = buildWinnerFromSessionData(sessionPayload);
-
-    if (winnerInfo) {
-      renderPanel(winnerInfo, sessionPayload?.source || "OpenF1 + Jolpica");
-      renderApiNote("Данные: OpenF1 + Jolpica API, без демо-подмены");
-    }
+    root.querySelectorAll(".driver-btn").forEach((button) => {
+      button.addEventListener("click", async () => {
+        state.selectedDriverNumber = button.dataset.driver;
+        await loadLaps();
+        render();
+      });
+    });
   }
 
   function start() {
-    addStyles();
-    updateVisuals();
-    setInterval(updateVisuals, 1800);
-
-    const observer = new MutationObserver(() => updateVisuals());
-    observer.observe(document.body, { childList: true, subtree: true });
+    getRoot();
+    loadAll();
   }
 
   if (document.readyState === "loading") {
