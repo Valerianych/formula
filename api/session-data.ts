@@ -26,6 +26,8 @@ function findResult(session: any, races: any[]) {
 }
 
 export default async function handler(req: any, res: any) {
+  res.setHeader("Cache-Control", "no-store, no-cache, max-age=0, must-revalidate");
+
   const sessionKey = Number(req.query?.session_key);
 
   if (!Number.isFinite(sessionKey)) {
@@ -40,12 +42,15 @@ export default async function handler(req: any, res: any) {
       const result = findResult(data.session, races);
 
       if (result) {
+        const winnerLine = `Победитель гонки: ${result.winner} (${result.winnerTeam})`;
+
         data.session = {
           ...data.session,
-          meeting_name: `${result.raceName} - winner: ${result.winner}`,
+          meeting_name: `${result.raceName} - ${winnerLine}`,
           winner: result.winner,
           winnerTeam: result.winnerTeam,
           winnerTime: result.time,
+          winnerLine,
         } as any;
 
         data.events = [
@@ -53,7 +58,7 @@ export default async function handler(req: any, res: any) {
             date: result.date,
             lap_number: null,
             category: "Result",
-            message: `Race winner: ${result.winner}. Team: ${result.winnerTeam}. Finish time: ${result.time}.`,
+            message: winnerLine,
             flag: "CHEQUERED",
           },
           ...(data.events || []),
