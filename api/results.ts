@@ -1,6 +1,8 @@
 import { getJolpicaRaceResults, parseYear } from "./_f1Api";
 
 export default async function handler(req: any, res: any) {
+  res.setHeader("Cache-Control", "no-store, no-cache, max-age=0, must-revalidate");
+
   const year = parseYear(req.query?.year);
 
   try {
@@ -8,7 +10,8 @@ export default async function handler(req: any, res: any) {
     const readableRaces = races.map((race: any) => ({
       ...race,
       winnerAcronym: race.winner,
-      simpleSummary: `Гонку выиграл ${race.winner}. Команда: ${race.winnerTeam}. Этап: ${race.raceName}.`,
+      winnerLine: `Победитель гонки: ${race.winner} (${race.winnerTeam})`,
+      simpleSummary: `Гонку ${race.raceName} выиграл ${race.winner}. Команда: ${race.winnerTeam}.`,
     }));
 
     return res.status(200).json({
@@ -16,7 +19,7 @@ export default async function handler(req: any, res: any) {
       year,
       source: "Jolpica API",
       races: readableRaces,
-      note: readableRaces.length ? "Результаты гонок получены с Jolpica API." : "Jolpica API не вернул результаты за выбранный сезон.",
+      note: readableRaces.length ? `Результаты гонок за ${year} год получены с Jolpica API.` : `Jolpica API не вернул результаты за ${year} год.`,
     });
   } catch (error: any) {
     return res.status(200).json({
@@ -25,7 +28,7 @@ export default async function handler(req: any, res: any) {
       source: "Jolpica API",
       races: [],
       error: error?.message || "Jolpica API unavailable",
-      note: "Данные не подменялись демо-набором. Внешний API сейчас не ответил.",
+      note: `Данные за ${year} год не подменялись демо-набором. Внешний API сейчас не ответил.`,
     });
   }
 }
