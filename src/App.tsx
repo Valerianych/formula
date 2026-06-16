@@ -188,6 +188,46 @@ function generateFastF1LapData(driverA: string, driverB: string, param: "speed" 
   return points;
 }
 
+// Russian translation helper for F1 Race Control Messages
+function translateRaceControlMessage(msg: string): string {
+  if (!msg) return "";
+  let res = msg;
+  const dict: { [key: string]: string } = {
+    "RED FLAG - Session suspended after high-speed crash between Perez, Magnussen, and Hulkenberg at Beau Rivage": 
+      "КРАСНЫЙ ФЛАГ - Сессия остановлена после серьезной аварии между Пересом, Магнуссеном и Хюлькенбергом в повороте Beau Rivage",
+    "RESTART - Race restarted with standing start after track cleanup and repairs": 
+      "РЕСТАРТ - Гонка возобновлена со старта с места после очистки трассы и восстановления барьеров safety",
+    "DRS ENABLED - Race direction enabled the Drag Reduction System": 
+      "DRS РАЗРЕШЕН - Дирекция гонки активировала систему снижения лобового сопротивления (DRS)",
+    "YELLOW FLAG Sector 2 - Carlos Sainz punctured tire. Resumed race after immediate pitstop under red flag": 
+      "ЖЕЛТЫЙ ФЛАГ Сектор 2 - Прокол колеса у Карлоса Сайнса. Вернулся на трассу после пит-стопа под красным флагом",
+    "TRACK CLEAR - Yellow flag in Sector 2 cleared, full green-flag racing": 
+      "ТРАССА СВОБОДНА - Желтый флаг в Секторе 2 снят, объявлен режим зеленых флагов"
+  };
+
+  if (dict[msg]) return dict[msg];
+
+  res = res.replace(/RED FLAG/gi, "КРАСНЫЙ ФЛАГ");
+  res = res.replace(/YELLOW FLAG/gi, "ЖЕЛТЫЙ ФЛАГ");
+  res = res.replace(/GREEN FLAG/gi, "ЗЕЛЕНЫЙ ФЛАГ");
+  res = res.replace(/DRS ENABLED/gi, "DRS РАЗРЕШЕН");
+  res = res.replace(/DRS DISABLED/gi, "DRS ОТКЛЮЧЕН");
+  res = res.replace(/SAFETY CAR/gi, "МАШИНА БЕЗОПАСНОСТИ");
+  res = res.replace(/VIRTUAL SAFETY CAR/gi, "ВИРТУАЛЬНЫЙ СЕЙФТИ-КАР");
+  res = res.replace(/VSC DEPLOYED/gi, "РЕЖИМ VSC АКТИВИРОВАН");
+  res = res.replace(/VSC ENDED/gi, "РЕЖИМ VSC ЗАВЕРШЕН");
+  res = res.replace(/RESTART/gi, "РЕСТАРТ");
+  res = res.replace(/TRACK CLEAR/gi, "ТРАССА СВОБОДНА");
+  res = res.replace(/Sector 1/gi, "Сектор 1");
+  res = res.replace(/Sector 2/gi, "Сектор 2");
+  res = res.replace(/Sector 3/gi, "Сектор 3");
+  res = res.replace(/cleared/gi, "снят");
+  res = res.replace(/INVESTIGATION/gi, "РАССЛЕДОВАНИЕ");
+  res = res.replace(/PENALTY/gi, "ШТРАФ");
+
+  return res;
+}
+
 export default function App() {
   // Navigation tabs selector
   const [activeTab, setActiveTab] = useState<"telemetry" | "standings" | "fastf1" | "f1db">("telemetry");
@@ -493,9 +533,25 @@ export default function App() {
         fallbackLaps = MOCK_SESSIONS[sessKey].laps[dNum];
       } else if (MOCK_SESSIONS[sessKey]?.laps) {
         const firstDriverNum = Object.keys(MOCK_SESSIONS[sessKey].laps)[0];
-        fallbackLaps = MOCK_SESSIONS[sessKey].laps[Number(firstDriverNum)] || [];
+        const baseLaps = MOCK_SESSIONS[sessKey].laps[Number(firstDriverNum)] || [];
+        const scale = 1 + (((dNum * 17) % 31) - 15) / 500;
+        fallbackLaps = baseLaps.map(l => ({
+          ...l,
+          lap_duration: l.lap_duration ? Number((l.lap_duration * scale).toFixed(3)) : null,
+          duration_sector_1: l.duration_sector_1 ? Number((l.duration_sector_1 * scale).toFixed(3)) : null,
+          duration_sector_2: l.duration_sector_2 ? Number((l.duration_sector_2 * scale).toFixed(3)) : null,
+          duration_sector_3: l.duration_sector_3 ? Number((l.duration_sector_3 * scale).toFixed(3)) : null,
+        }));
       } else {
-        fallbackLaps = MOCK_SESSIONS[9507]?.laps?.[dNum] || MOCK_SESSIONS[9507]?.laps?.[16] || [];
+        const baseLaps = MOCK_SESSIONS[9507]?.laps?.[dNum] || MOCK_SESSIONS[9507]?.laps?.[16] || [];
+        const scale = 1 + (((dNum * 17) % 31) - 15) / 500;
+        fallbackLaps = baseLaps.map(l => ({
+          ...l,
+          lap_duration: l.lap_duration ? Number((l.lap_duration * scale).toFixed(3)) : null,
+          duration_sector_1: l.duration_sector_1 ? Number((l.duration_sector_1 * scale).toFixed(3)) : null,
+          duration_sector_2: l.duration_sector_2 ? Number((l.duration_sector_2 * scale).toFixed(3)) : null,
+          duration_sector_3: l.duration_sector_3 ? Number((l.duration_sector_3 * scale).toFixed(3)) : null,
+        }));
       }
       setDriverLaps(fallbackLaps);
 
@@ -544,27 +600,172 @@ export default function App() {
       }
     } catch (err) {
       console.warn("API Offline or hosted statically - loading standings from fallback...", err);
-      const fallbackDrivers = [
-        { position: 1, points: 437, wins: 9, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull" },
-        { position: 2, points: 384, wins: 3, driverName: "Lando Norris", driverAcronym: "NOR", nationality: "British", teamName: "McLaren" },
-        { position: 3, points: 325, wins: 2, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
-        { position: 4, points: 244, wins: 2, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
-        { position: 5, points: 228, wins: 1, driverName: "Oscar Piastri", driverAcronym: "PIA", nationality: "Australian", teamName: "McLaren" },
-        { position: 6, points: 190, wins: 1, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "Ferrari" },
-      ];
-      const fallbackConstructors = [
-        { position: 1, points: 641, wins: 8, teamName: "McLaren", nationality: "British" },
-        { position: 2, points: 585, wins: 3, teamName: "Ferrari", nationality: "Italian" },
-        { position: 3, points: 544, wins: 9, teamName: "Red Bull", nationality: "Austrian" },
-        { position: 4, points: 382, wins: 2, teamName: "Mercedes", nationality: "British" },
-      ];
+      
+      let fallbackDrivers = [];
+      let fallbackConstructors = [];
+
+      if (jolpicaYear === 2026) {
+        fallbackDrivers = [
+          { position: 1, points: 412, wins: 10, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
+          { position: 2, points: 388, wins: 5, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Ferrari" },
+          { position: 3, points: 374, wins: 4, driverName: "Lando Norris", driverAcronym: "NOR", nationality: "British", teamName: "McLaren" },
+          { position: 4, points: 345, wins: 2, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
+          { position: 5, points: 290, wins: 2, driverName: "Oscar Piastri", driverAcronym: "PIA", nationality: "Australian", teamName: "McLaren" },
+          { position: 6, points: 242, wins: 1, driverName: "George Russell", driverAcronym: "RUS", nationality: "British", teamName: "Mercedes" },
+        ];
+        fallbackConstructors = [
+          { position: 1, points: 733, wins: 7, teamName: "Ferrari", nationality: "Italian" },
+          { position: 2, points: 664, wins: 6, teamName: "McLaren", nationality: "British" },
+          { position: 3, points: 557, wins: 10, teamName: "Red Bull Racing", nationality: "Austrian" },
+          { position: 4, points: 310, wins: 1, teamName: "Mercedes", nationality: "British" },
+        ];
+      } else if (jolpicaYear === 2025) {
+        fallbackDrivers = [
+          { position: 1, points: 437, wins: 9, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
+          { position: 2, points: 384, wins: 3, driverName: "Lando Norris", driverAcronym: "NOR", nationality: "British", teamName: "McLaren" },
+          { position: 3, points: 325, wins: 2, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
+          { position: 4, points: 244, wins: 2, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
+          { position: 5, points: 228, wins: 1, driverName: "Oscar Piastri", driverAcronym: "PIA", nationality: "Australian", teamName: "McLaren" },
+          { position: 6, points: 190, wins: 1, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "Ferrari" },
+        ];
+        fallbackConstructors = [
+          { position: 1, points: 641, wins: 8, teamName: "McLaren", nationality: "British" },
+          { position: 2, points: 585, wins: 3, teamName: "Ferrari", nationality: "Italian" },
+          { position: 3, points: 544, wins: 9, teamName: "Red Bull Racing", nationality: "Austrian" },
+          { position: 4, points: 382, wins: 2, teamName: "Mercedes", nationality: "British" },
+        ];
+      } else if (jolpicaYear === 2024) {
+        fallbackDrivers = [
+          { position: 1, points: 575, wins: 15, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
+          { position: 2, points: 384, wins: 3, driverName: "Lando Norris", driverAcronym: "NOR", nationality: "British", teamName: "McLaren" },
+          { position: 3, points: 356, wins: 3, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
+          { position: 4, points: 262, wins: 2, driverName: "Oscar Piastri", driverAcronym: "PIA", nationality: "Australian", teamName: "McLaren" },
+          { position: 5, points: 258, wins: 2, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "Ferrari" },
+          { position: 6, points: 245, wins: 2, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
+        ];
+        fallbackConstructors = [
+          { position: 1, points: 651, wins: 5, teamName: "McLaren", nationality: "British" },
+          { position: 2, points: 614, wins: 5, teamName: "Ferrari", nationality: "Italian" },
+          { position: 3, points: 589, wins: 15, teamName: "Red Bull Racing", nationality: "Austrian" },
+          { position: 4, points: 473, wins: 3, teamName: "Mercedes", nationality: "British" },
+        ];
+      } else if (jolpicaYear === 2023) {
+        fallbackDrivers = [
+          { position: 1, points: 575, wins: 19, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
+          { position: 2, points: 285, wins: 2, driverName: "Sergio Perez", driverAcronym: "PER", nationality: "Mexican", teamName: "Red Bull Racing" },
+          { position: 3, points: 234, wins: 0, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
+          { position: 4, points: 206, wins: 0, driverName: "Fernando Alonso", driverAcronym: "ALO", nationality: "Spanish", teamName: "Aston Martin" },
+          { position: 5, points: 206, wins: 1, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
+          { position: 6, points: 200, wins: 1, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "Ferrari" },
+        ];
+        fallbackConstructors = [
+          { position: 1, points: 860, wins: 21, teamName: "Red Bull Racing", nationality: "Austrian" },
+          { position: 2, points: 409, wins: 0, teamName: "Mercedes", nationality: "British" },
+          { position: 3, points: 406, wins: 1, teamName: "Ferrari", nationality: "Italian" },
+          { position: 4, points: 302, wins: 0, teamName: "McLaren", nationality: "British" },
+        ];
+      } else if (jolpicaYear === 2022) {
+        fallbackDrivers = [
+          { position: 1, points: 454, wins: 15, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
+          { position: 2, points: 308, wins: 3, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
+          { position: 3, points: 305, wins: 2, driverName: "Sergio Perez", driverAcronym: "PER", nationality: "Mexican", teamName: "Red Bull Racing" },
+          { position: 4, points: 275, wins: 1, driverName: "George Russell", driverAcronym: "RUS", nationality: "British", teamName: "Mercedes" },
+          { position: 5, points: 246, wins: 1, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "Ferrari" },
+          { position: 6, points: 240, wins: 0, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
+        ];
+        fallbackConstructors = [
+          { position: 1, points: 759, wins: 17, teamName: "Red Bull Racing", nationality: "Austrian" },
+          { position: 2, points: 554, wins: 4, teamName: "Ferrari", nationality: "Italian" },
+          { position: 3, points: 515, wins: 1, teamName: "Mercedes", nationality: "British" },
+          { position: 4, points: 159, wins: 0, teamName: "McLaren", nationality: "British" },
+        ];
+      } else if (jolpicaYear === 2021) {
+        fallbackDrivers = [
+          { position: 1, points: 395, wins: 10, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
+          { position: 2, points: 387, wins: 8, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
+          { position: 3, points: 226, wins: 1, driverName: "Valtteri Bottas", driverAcronym: "BOT", nationality: "Finnish", teamName: "Mercedes" },
+          { position: 4, points: 190, wins: 1, driverName: "Sergio Perez", driverAcronym: "PER", nationality: "Mexican", teamName: "Red Bull Racing" },
+          { position: 5, points: 164, wins: 0, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "Ferrari" },
+          { position: 6, points: 160, wins: 0, driverName: "Lando Norris", driverAcronym: "NOR", nationality: "British", teamName: "McLaren" },
+        ];
+        fallbackConstructors = [
+          { position: 1, points: 613, wins: 9, teamName: "Mercedes", nationality: "British" },
+          { position: 2, points: 585, wins: 11, teamName: "Red Bull Racing", nationality: "Austrian" },
+          { position: 3, points: 323, wins: 0, teamName: "Ferrari", nationality: "Italian" },
+          { position: 4, points: 275, wins: 1, teamName: "McLaren", nationality: "British" },
+        ];
+      } else if (jolpicaYear === 2020) {
+        fallbackDrivers = [
+          { position: 1, points: 347, wins: 11, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
+          { position: 2, points: 223, wins: 2, driverName: "Valtteri Bottas", driverAcronym: "BOT", nationality: "Finnish", teamName: "Mercedes" },
+          { position: 3, points: 214, wins: 2, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
+          { position: 4, points: 125, wins: 1, driverName: "Sergio Perez", driverAcronym: "PER", nationality: "Mexican", teamName: "Racing Point" },
+          { position: 5, points: 119, wins: 0, driverName: "Daniel Ricciardo", driverAcronym: "RIC", nationality: "Australian", teamName: "Renault" },
+          { position: 6, points: 105, wins: 0, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "McLaren" },
+        ];
+        fallbackConstructors = [
+          { position: 1, points: 573, wins: 13, teamName: "Mercedes", nationality: "British" },
+          { position: 2, points: 319, wins: 2, teamName: "Red Bull Racing", nationality: "Austrian" },
+          { position: 3, points: 202, wins: 0, teamName: "McLaren", nationality: "British" },
+          { position: 4, points: 195, wins: 1, teamName: "Racing Point", nationality: "British" },
+        ];
+      } else if (jolpicaYear === 2019) {
+        fallbackDrivers = [
+          { position: 1, points: 413, wins: 11, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
+          { position: 2, points: 326, wins: 4, driverName: "Valtteri Bottas", driverAcronym: "BOT", nationality: "Finnish", teamName: "Mercedes" },
+          { position: 3, points: 278, wins: 3, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
+          { position: 4, points: 264, wins: 2, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
+          { position: 5, points: 240, wins: 1, driverName: "Sebastian Vettel", driverAcronym: "VET", nationality: "German", teamName: "Ferrari" },
+          { position: 6, points: 96, wins: 0, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "McLaren" },
+        ];
+        fallbackConstructors = [
+          { position: 1, points: 739, wins: 15, teamName: "Mercedes", nationality: "British" },
+          { position: 2, points: 504, wins: 3, teamName: "Ferrari", nationality: "Italian" },
+          { position: 3, points: 417, wins: 3, teamName: "Red Bull Racing", nationality: "Austrian" },
+          { position: 4, points: 145, wins: 0, teamName: "McLaren", nationality: "British" },
+        ];
+      } else {
+        // 2018
+        fallbackDrivers = [
+          { position: 1, points: 408, wins: 11, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
+          { position: 2, points: 320, wins: 5, driverName: "Sebastian Vettel", driverAcronym: "VET", nationality: "German", teamName: "Ferrari" },
+          { position: 3, points: 251, wins: 1, driverName: "Kimi Räikkönen", driverAcronym: "RAI", nationality: "Finnish", teamName: "Ferrari" },
+          { position: 4, points: 249, wins: 2, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
+          { position: 5, points: 247, wins: 0, driverName: "Valtteri Bottas", driverAcronym: "BOT", nationality: "Finnish", teamName: "Mercedes" },
+          { position: 6, points: 170, wins: 2, driverName: "Daniel Ricciardo", driverAcronym: "RIC", nationality: "Australian", teamName: "Red Bull Racing" },
+        ];
+        fallbackConstructors = [
+          { position: 1, points: 655, wins: 11, teamName: "Mercedes", nationality: "British" },
+          { position: 2, points: 571, wins: 6, teamName: "Ferrari", nationality: "Italian" },
+          { position: 3, points: 419, wins: 4, teamName: "Red Bull Racing", nationality: "Austrian" },
+          { position: 4, points: 93, wins: 0, teamName: "Renault", nationality: "French" },
+        ];
+      }
       const fallbackRaces = [
-        { round: 1, raceName: "Australian Grand Prix", circuitName: "Albert Park Circuit", locality: "Melbourne", country: "Australia", date: `${jolpicaYear}-03-16`, winner: "Charles Leclerc", winnerAcronym: "LEC", winnerTeam: "Ferrari", time: "1:26:14.223" },
-        { round: 2, raceName: "Chinese Grand Prix", circuitName: "Shanghai International Circuit", locality: "Shanghai", country: "China", date: `${jolpicaYear}-03-30`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:31:02.100" },
-        { round: 3, raceName: "Japanese Grand Prix", circuitName: "Suzuka International Racing Course", locality: "Suzuka", country: "Japan", date: `${jolpicaYear}-04-06`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:28:44.221" },
-        { round: 4, raceName: "Bahrain Grand Prix", circuitName: "Bahrain International Circuit", locality: "Sakhir", country: "Bahrain", date: `${jolpicaYear}-04-13`, winner: "Lando Norris", winnerAcronym: "NOR", winnerTeam: "McLaren", time: "1:30:52.332" },
-        { round: 5, raceName: "Monaco Grand Prix", circuitName: "Circuit de Monaco", locality: "Monte Carlo", country: "Monaco", date: `${jolpicaYear}-05-25`, winner: "Charles Leclerc", winnerAcronym: "LEC", winnerTeam: "Ferrari", time: "1:41:22.001" },
-        { round: 6, raceName: "British Grand Prix", circuitName: "Silverstone Circuit", locality: "Silverstone", country: "UK", date: `${jolpicaYear}-07-06`, winner: "Lewis Hamilton", winnerAcronym: "HAM", winnerTeam: "Mercedes", time: "1:29:12.441" },
+        { round: 1, raceName: "Bahrain Grand Prix", circuitName: "Bahrain International Circuit", locality: "Sakhir", country: "Bahrain", date: `${jolpicaYear}-03-02`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:31:44.742" },
+        { round: 2, raceName: "Saudi Arabian Grand Prix", circuitName: "Jeddah Street Circuit", locality: "Jeddah", country: "Saudi Arabia", date: `${jolpicaYear}-03-09`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:20:43.119" },
+        { round: 3, raceName: "Australian Grand Prix", circuitName: "Albert Park Circuit", locality: "Melbourne", country: "Australia", date: `${jolpicaYear}-03-24`, winner: "Carlos Sainz", winnerAcronym: "SAI", winnerTeam: "Ferrari", time: "1:20:26.843" },
+        { round: 4, raceName: "Japanese Grand Prix", circuitName: "Suzuka International Racing Course", locality: "Suzuka", country: "Japan", date: `${jolpicaYear}-04-07`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:54:23.566" },
+        { round: 5, raceName: "Chinese Grand Prix", circuitName: "Shanghai International Circuit", locality: "Shanghai", country: "China", date: `${jolpicaYear}-04-21`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:40:52.554" },
+        { round: 6, raceName: "Miami Grand Prix", circuitName: "Miami International Autodrome", locality: "Miami", country: "USA", date: `${jolpicaYear}-05-05`, winner: "Lando Norris", winnerAcronym: "NOR", winnerTeam: "McLaren", time: "1:30:49.876" },
+        { round: 7, raceName: "Emilia Romagna Grand Prix", circuitName: "Autodromo Enzo e Dino Ferrari", locality: "Imola", country: "Italy", date: `${jolpicaYear}-05-19`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:25:25.252" },
+        { round: 8, raceName: "Monaco Grand Prix", circuitName: "Circuit de Monaco", locality: "Monte Carlo", country: "Monaco", date: `${jolpicaYear}-05-26`, winner: "Charles Leclerc", winnerAcronym: "LEC", winnerTeam: "Ferrari", time: "1:41:22.001" },
+        { round: 9, raceName: "Canadian Grand Prix", circuitName: "Circuit Gilles Villeneuve", locality: "Montreal", country: "Canada", date: `${jolpicaYear}-06-09`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:28:30.410" },
+        { round: 10, raceName: "Spanish Grand Prix", circuitName: "Circuit de Barcelona-Catalunya", locality: "Barcelona", country: "Spain", date: `${jolpicaYear}-06-23`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:29:05.112" },
+        { round: 11, raceName: "Austrian Grand Prix", circuitName: "Red Bull Ring", locality: "Spielberg", country: "Austria", date: `${jolpicaYear}-06-30`, winner: "George Russell", winnerAcronym: "RUS", winnerTeam: "Mercedes", time: "1:24:22.410" },
+        { round: 12, raceName: "British Grand Prix", circuitName: "Silverstone Circuit", locality: "Silverstone", country: "UK", date: `${jolpicaYear}-07-07`, winner: "Lewis Hamilton", winnerAcronym: "HAM", winnerTeam: "Mercedes", time: "1:29:12.441" },
+        { round: 13, raceName: "Hungarian Grand Prix", circuitName: "Hungaroring", locality: "Budapest", country: "Hungary", date: `${jolpicaYear}-07-21`, winner: "Oscar Piastri", winnerAcronym: "PIA", winnerTeam: "McLaren", time: "1:38:01.992" },
+        { round: 14, raceName: "Belgian Grand Prix", circuitName: "Circuit de Spa-Francorchamps", locality: "Spa", country: "Belgium", date: `${jolpicaYear}-07-28`, winner: "Lewis Hamilton", winnerAcronym: "HAM", winnerTeam: "Mercedes", time: "1:19:57.510" },
+        { round: 15, raceName: "Dutch Grand Prix", circuitName: "Circuit Zandvoort", locality: "Zandvoort", country: "Netherlands", date: `${jolpicaYear}-08-25`, winner: "Lando Norris", winnerAcronym: "NOR", winnerTeam: "McLaren", time: "1:30:45.519" },
+        { round: 16, raceName: "Italian Grand Prix", circuitName: "Autodromo Nazionale Monza", locality: "Monza", country: "Italy", date: `${jolpicaYear}-08-31`, winner: "Charles Leclerc", winnerAcronym: "LEC", winnerTeam: "Ferrari", time: "1:14:40.727" },
+        { round: 17, raceName: "Azerbaijan Grand Prix", circuitName: "Baku City Circuit", locality: "Baku", country: "Azerbaijan", date: `${jolpicaYear}-09-15`, winner: "Oscar Piastri", winnerAcronym: "PIA", winnerTeam: "McLaren", time: "1:32:58.007" },
+        { round: 18, raceName: "Singapore Grand Prix", circuitName: "Marina Bay Street Circuit", locality: "Singapore", country: "Singapore", date: `${jolpicaYear}-09-22`, winner: "Lando Norris", winnerAcronym: "NOR", winnerTeam: "McLaren", time: "1:40:50.571" },
+        { round: 19, raceName: "United States Grand Prix", circuitName: "Circuit of the Americas", locality: "Austin", country: "USA", date: `${jolpicaYear}-10-20`, winner: "Charles Leclerc", winnerAcronym: "LEC", winnerTeam: "Ferrari", time: "1:35:09.631" },
+        { round: 20, raceName: "Mexico City Grand Prix", circuitName: "Autódromo Hermanos Rodríguez", locality: "Mexico City", country: "Mexico", date: `${jolpicaYear}-10-27`, winner: "Carlos Sainz", winnerAcronym: "SAI", winnerTeam: "Ferrari", time: "1:40:55.807" },
+        { round: 21, raceName: "São Paulo Grand Prix", circuitName: "Autódromo José Carlos Pace", locality: "São Paulo", country: "Brazil", date: `${jolpicaYear}-11-03`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "2:06:54.430" },
+        { round: 22, raceName: "Las Vegas Grand Prix", circuitName: "Las Vegas Strip Circuit", locality: "Las Vegas", country: "USA", date: `${jolpicaYear}-11-23`, winner: "George Russell", winnerAcronym: "RUS", winnerTeam: "Mercedes", time: "1:22:05.992" },
+        { round: 23, raceName: "Qatar Grand Prix", circuitName: "Lusail International Circuit", locality: "Lusail", country: "Qatar", date: `${jolpicaYear}-12-01`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:31:05.323" },
+        { round: 24, raceName: "Abu Dhabi Grand Prix", circuitName: "Yas Marina Circuit", locality: "Yas Marina", country: "UAE", date: `${jolpicaYear}-12-08`, winner: "Lewis Hamilton", winnerAcronym: "HAM", winnerTeam: "Mercedes", time: "1:39:45.302" }
       ];
       setStandingDrivers(fallbackDrivers);
       setStandingConstructors(fallbackConstructors);
@@ -1309,7 +1510,7 @@ export default function App() {
                           <span className="text-gray-400">{evt.lap_number ? `Круг ${evt.lap_number}` : "Общее"}</span>
                           {evt.flag && <span className="px-1.5 py-0.2 rounded bg-black/40 text-white font-bold">{evt.flag}</span>}
                         </div>
-                        <p className="text-[11px] text-gray-200">{evt.message}</p>
+                        <p className="text-[11px] text-gray-200">{translateRaceControlMessage(evt.message)}</p>
                       </div>
                     );
                   })
