@@ -49,25 +49,59 @@ async function fetchWithTimeout(url: string, timeoutMs = 5000): Promise<Response
   }
 }
 
+// Helper to build a detailed fallback F1 calendar timeline for any requested year
+function getFallbackSessionsForYear(year: number) {
+  const templates = [
+    { name: "Bahrain Grand Prix", location: "Sakhir", country: "Bahrain", month: 3, day: 2, keyOffset: 1 },
+    { name: "Saudi Arabian Grand Prix", location: "Jeddah", country: "Saudi Arabia", month: 3, day: 9, keyOffset: 2 },
+    { name: "Australian Grand Prix", location: "Melbourne", country: "Australia", month: 3, day: 24, keyOffset: 3 },
+    { name: "Japanese Grand Prix", location: "Suzuka", country: "Japan", month: 4, day: 7, keyOffset: 4 },
+    { name: "Chinese Grand Prix", location: "Shanghai", country: "China", month: 4, day: 21, keyOffset: 5 },
+    { name: "Miami Grand Prix", location: "Miami", country: "USA", month: 5, day: 5, keyOffset: 6 },
+    { name: "Emilia Romagna Grand Prix", location: "Imola", country: "Italy", month: 5, day: 19, keyOffset: 7 },
+    { name: "Monaco Grand Prix", location: "Monte Carlo", country: "Monaco", month: 5, day: 26, keyOffset: 8 },
+    { name: "Canadian Grand Prix", location: "Montreal", country: "Canada", month: 6, day: 9, keyOffset: 9 },
+    { name: "Spanish Grand Prix", location: "Barcelona", country: "Spain", month: 6, day: 23, keyOffset: 10 },
+    { name: "Austrian Grand Prix", location: "Spielberg", country: "Austria", month: 6, day: 30, keyOffset: 11 },
+    { name: "British Grand Prix", location: "Silverstone", country: "Great Britain", month: 7, day: 7, keyOffset: 12 },
+    { name: "Hungarian Grand Prix", location: "Budapest", country: "Hungary", month: 7, day: 21, keyOffset: 13 },
+    { name: "Belgian Grand Prix", location: "Spa", country: "Belgium", month: 7, day: 28, keyOffset: 14 },
+    { name: "Dutch Grand Prix", location: "Zandvoort", country: "Netherlands", month: 8, day: 25, keyOffset: 15 },
+    { name: "Italian Grand Prix", location: "Monza", country: "Italy", month: 9, day: 1, keyOffset: 16 },
+    { name: "Azerbaijan Grand Prix", location: "Baku", country: "Azerbaijan", month: 9, day: 15, keyOffset: 17 },
+    { name: "Singapore Grand Prix", location: "Singapore", country: "Singapore", month: 9, day: 22, keyOffset: 18 },
+    { name: "United States Grand Prix", location: "Austin", country: "USA", month: 10, day: 20, keyOffset: 19 },
+    { name: "Mexico City Grand Prix", location: "Mexico City", country: "Mexico", month: 10, day: 27, keyOffset: 20 },
+    { name: "São Paulo Grand Prix", location: "São Paulo", country: "Brazil", month: 11, day: 3, keyOffset: 21 },
+    { name: "Las Vegas Grand Prix", location: "Las Vegas", country: "USA", month: 11, day: 23, keyOffset: 22 },
+    { name: "Qatar Grand Prix", location: "Lusail", country: "Qatar", month: 12, day: 1, keyOffset: 23 },
+    { name: "Abu Dhabi Grand Prix", location: "Yas Marina", country: "UAE", month: 12, day: 8, keyOffset: 24 },
+  ];
+
+  return templates.map((t) => {
+    const monthStr = String(t.month).padStart(2, "0");
+    const dayStr = String(t.day).padStart(2, "0");
+    return {
+      session_key: year * 1000 + t.keyOffset,
+      session_name: "Race",
+      session_type: "Race",
+      meeting_key: year * 100 + t.keyOffset,
+      meeting_name: `${t.name} (${year})`,
+      location: t.location,
+      country_name: t.country,
+      year: year,
+      date_start: `${year}-${monthStr}-${dayStr}T14:00:00Z`
+    };
+  }).sort((a, b) => new Date(b.date_start).getTime() - new Date(a.date_start).getTime());
+}
+
 // 1. Get GP sessions, merged with local mock high-quality demos
 app.get("/api/sessions", async (req, res) => {
   const yearStr = req.query.year || "2025";
   const year = parseInt(yearStr as string, 10);
 
-  // High-fidelity fallback list
-  let mockSessionList = Object.values(MOCK_SESSIONS)
-    .filter((s) => s.session.year === year)
-    .map((s) => s.session);
-
-  // If we have no mock data for this specific year (e.g. 2025/2026),
-  // adapt existing mock profiles dynamically so there is always steady fallback data
-  if (mockSessionList.length === 0) {
-    mockSessionList = Object.values(MOCK_SESSIONS).map((s) => ({
-      ...s.session,
-      year: year,
-      meeting_name: `${s.session.meeting_name} (${year})`
-    }));
-  }
+  // High-fidelity fallback calendar spanning 24 diverse Grand Prix
+  const mockSessionList = getFallbackSessionsForYear(year);
 
   try {
     // Try to fetch active sessions from OpenF1 for the year
@@ -76,16 +110,15 @@ app.get("/api/sessions", async (req, res) => {
     const response = await fetchWithTimeout(url, 4000);
     if (response.ok) {
       const data = await response.json();
-      if (Array.isArray(data)) {
-        // Filter out practice sessions to keep UI clean and fast, then sort
+      if (Array.isArray(data) && data.length >= 5) {
+        // Filter out practice sessions to keep UI clean and fast
         const cleanSessions = data.filter((s: any) =>
           ["Race", "Qualifying", "Sprint"].includes(s.session_name)
         );
 
-        // Merge, making sure we don't duplicate keys
-        const merged = [...mockSessionList];
-        for (const real of cleanSessions) {
-          if (!merged.some((m) => m.session_key === real.session_key)) {
+        if (cleanSessions.length >= 5) {
+          const merged = [];
+          for (const real of cleanSessions) {
             merged.push({
               session_key: real.session_key,
               session_name: real.session_name,
@@ -98,19 +131,19 @@ app.get("/api/sessions", async (req, res) => {
               date_start: real.date_start,
             });
           }
-        }
 
-        // Sort by start date descending
-        merged.sort((a, b) => new Date(b.date_start).getTime() - new Date(a.date_start).getTime());
-        return res.json({ success: true, sessions: merged, isDemo: false });
+          // Sort by start date descending
+          merged.sort((a, b) => new Date(b.date_start).getTime() - new Date(a.date_start).getTime());
+          return res.json({ success: true, sessions: merged, isDemo: false });
+        }
       }
     }
-    // Fall back to demos if parse fails
-    return res.json({ success: true, sessions: mockSessionList, isDemo: true, note: "Использованы демо-сессии" });
+    // Fall back to completo dynamic calendar if OpenF1 has 0 or incomplete entries
+    return res.json({ success: true, sessions: mockSessionList, isDemo: true, note: "Загружен резервный календарь" });
   } catch (error: any) {
     console.error("OpenF1 API Error or Timeout fetching sessions:", error?.message || error);
-    // Return only demos with an advisory note
-    return res.json({ success: true, sessions: mockSessionList, isDemo: true, note: "OpenF1 API недоступен, загружены локальные демо-сессии." });
+    // Return complete fallback calendar
+    return res.json({ success: true, sessions: mockSessionList, isDemo: true, note: "OpenF1 API недоступен, загружен резервный календарь." });
   }
 });
 
@@ -278,6 +311,45 @@ app.get("/api/session-data", async (req, res) => {
     });
   }
 
+  // If sessionKey is one of our dynamic fallback calendar keys (e.g. 2025008)
+  const isFallbackKey = sessionKey >= 2018000 && sessionKey <= 2027000;
+  if (isFallbackKey) {
+    const year = Math.floor(sessionKey / 1000);
+    const keyOffset = sessionKey % 1000;
+    
+    const schedule = getFallbackSessionsForYear(year);
+    const matchedSession = schedule.find(s => s.session_key === sessionKey);
+    
+    // Odd offsets -> Monaco GP (9507), Even offsets -> British GP (9541)
+    const baseKey = (keyOffset % 2 === 1) ? 9507 : 9541;
+    const baseMock = MOCK_SESSIONS[baseKey];
+    
+    if (baseMock) {
+      const sessionDetails = matchedSession || {
+        session_key: sessionKey,
+        session_name: "Race",
+        session_type: "Race",
+        meeting_key: year * 100 + keyOffset,
+        meeting_name: `Grand Prix (${year})`,
+        location: "F1 Venue",
+        country_name: "F1 Country",
+        year: year,
+        date_start: `${year}-06-15T14:00:00Z`
+      };
+      
+      return res.json({
+        success: true,
+        isDemo: true,
+        data: {
+          session: sessionDetails,
+          drivers: baseMock.drivers,
+          weather: baseMock.weather,
+          events: baseMock.events
+        }
+      });
+    }
+  }
+
   // Otherwise, query OpenF1 dynamically
   try {
     // We run parallel requests for Session Details, Drivers, Weather, Events
@@ -396,6 +468,19 @@ app.get("/api/driver-laps", async (req, res) => {
   // Mock checking
   if (MOCK_SESSIONS[sKey]) {
     const ml = MOCK_SESSIONS[sKey].laps[dNum] || [];
+    return res.json({ success: true, laps: ml });
+  }
+
+  // If sKey is one of our dynamic fallback calendar keys (e.g. 2025008)
+  const isFallbackKey = sKey >= 2018000 && sKey <= 2027000;
+  if (isFallbackKey) {
+    const keyOffset = sKey % 1000;
+    const baseKey = (keyOffset % 2 === 1) ? 9507 : 9541;
+    const baseMock = MOCK_SESSIONS[baseKey];
+    let ml: any[] = [];
+    if (baseMock?.laps) {
+      ml = baseMock.laps[dNum] || baseMock.laps[Number(Object.keys(baseMock.laps)[0])] || [];
+    }
     return res.json({ success: true, laps: ml });
   }
 

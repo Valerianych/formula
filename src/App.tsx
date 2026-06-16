@@ -838,19 +838,19 @@ export default function App() {
               </div>
 
               {/* Year Choose */}
-              <div className="xl:col-span-3 space-y-2 relative z-10">
+              <div className="xl:col-span-4 space-y-2 relative z-10">
                 <label className="text-[11px] font-semibold text-gray-450 tracking-wide flex items-center gap-1.5 uppercase select-none">
                   <Calendar className="w-3.5 h-3.5 text-[#e10600]" /> Сезон гонок
                 </label>
-                <div className="grid grid-cols-4 gap-1.5 bg-[#090a0f] p-1.5 rounded-xl border border-[#2c2f44]">
-                  {[2026, 2025, 2024, 2023].map((yr) => (
+                <div className="flex bg-[#090a0f] p-1 rounded-xl border border-[#2c2f44] overflow-x-auto gap-1 scrollbar-thin">
+                  {[2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018].map((yr) => (
                     <button
                       key={yr}
                       onClick={() => setSelectedYear(yr)}
-                      className={`py-1.5 text-[11px] font-bold rounded-lg transition-all tracking-wider ${
+                      className={`px-3 py-1.5 text-[11px] font-bold rounded-lg transition-all tracking-wider shrink-0 ${
                         selectedYear === yr
                           ? "bg-[#e10600] text-white shadow-md"
-                          : "text-gray-400 hover:text-white"
+                          : "text-gray-400 hover:text-white hover:bg-white/5"
                       }`}
                     >
                       {yr}
@@ -860,7 +860,7 @@ export default function App() {
               </div>
 
               {/* Selector box */}
-              <div className="xl:col-span-5 space-y-2 relative z-10">
+              <div className="xl:col-span-4 space-y-2 relative z-10">
                 <label className="text-[11px] font-semibold text-gray-450 tracking-wide flex items-center gap-1.5 uppercase select-none">
                   <Flag className="w-3.5 h-3.5 text-[#e10600]" /> Этап / Гран-При
                 </label>
@@ -1299,8 +1299,8 @@ export default function App() {
                 <label className="text-[10px] uppercase font-black text-[#e10600] tracking-widest flex items-center gap-1.5">
                   <Calendar className="w-4 h-4" /> Сезон для загрузки зачетов
                 </label>
-                <div className="flex bg-[#090a0f] p-1 rounded-xl border border-[#2a2d41] overflow-x-auto">
-                  {[2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019].map((yr) => (
+                <div className="flex bg-[#090a0f] p-1 rounded-xl border border-[#2a2d41] overflow-x-auto scrollbar-thin">
+                  {[2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018].map((yr) => (
                     <button
                       key={yr}
                       onClick={() => setJolpicaYear(yr)}
