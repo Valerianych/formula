@@ -331,19 +331,49 @@ export default function App() {
       }
     } catch (err) {
       console.warn("API Offline or hosted statically - running safe local F1 fallback calendar...", err);
-      let mockSessionList = Object.values(MOCK_SESSIONS)
-        .filter((s) => s.session.year === selectedYear)
-        .map((s) => s.session);
+      
+      const templates = [
+        { name: "Bahrain Grand Prix", location: "Sakhir", country: "Bahrain", month: 3, day: 2, keyOffset: 1 },
+        { name: "Saudi Arabian Grand Prix", location: "Jeddah", country: "Saudi Arabia", month: 3, day: 9, keyOffset: 2 },
+        { name: "Australian Grand Prix", location: "Melbourne", country: "Australia", month: 3, day: 24, keyOffset: 3 },
+        { name: "Japanese Grand Prix", location: "Suzuka", country: "Japan", month: 4, day: 7, keyOffset: 4 },
+        { name: "Chinese Grand Prix", location: "Shanghai", country: "China", month: 4, day: 21, keyOffset: 5 },
+        { name: "Miami Grand Prix", location: "Miami", country: "USA", month: 5, day: 5, keyOffset: 6 },
+        { name: "Emilia Romagna Grand Prix", location: "Imola", country: "Italy", month: 5, day: 19, keyOffset: 7 },
+        { name: "Monaco Grand Prix", location: "Monte Carlo", country: "Monaco", month: 5, day: 26, keyOffset: 8 },
+        { name: "Canadian Grand Prix", location: "Montreal", country: "Canada", month: 6, day: 9, keyOffset: 9 },
+        { name: "Spanish Grand Prix", location: "Barcelona", country: "Spain", month: 6, day: 23, keyOffset: 10 },
+        { name: "Austrian Grand Prix", location: "Spielberg", country: "Austria", month: 6, day: 30, keyOffset: 11 },
+        { name: "British Grand Prix", location: "Silverstone", country: "UK", month: 7, day: 7, keyOffset: 12 },
+        { name: "Hungarian Grand Prix", location: "Budapest", country: "Hungary", month: 7, day: 21, keyOffset: 13 },
+        { name: "Belgian Grand Prix", location: "Spa", country: "Belgium", month: 7, day: 28, keyOffset: 14 },
+        { name: "Dutch Grand Prix", location: "Zandvoort", country: "Netherlands", month: 8, day: 25, keyOffset: 15 },
+        { name: "Italian Grand Prix", location: "Monza", country: "Italy", month: 9, day: 1, keyOffset: 16 },
+        { name: "Azerbaijan Grand Prix", location: "Baku", country: "Azerbaijan", month: 9, day: 15, keyOffset: 17 },
+        { name: "Singapore Grand Prix", location: "Singapore", country: "Singapore", month: 9, day: 22, keyOffset: 18 },
+        { name: "United States Grand Prix", location: "Austin", country: "USA", month: 10, day: 20, keyOffset: 19 },
+        { name: "Mexico City Grand Prix", location: "Mexico City", country: "Mexico", month: 10, day: 27, keyOffset: 20 },
+        { name: "São Paulo Grand Prix", location: "São Paulo", country: "Brazil", month: 11, day: 3, keyOffset: 21 },
+        { name: "Las Vegas Grand Prix", location: "Las Vegas", country: "USA", month: 11, day: 23, keyOffset: 22 },
+        { name: "Qatar Grand Prix", location: "Lusail", country: "Qatar", month: 12, day: 1, keyOffset: 23 },
+        { name: "Abu Dhabi Grand Prix", location: "Yas Marina", country: "UAE", month: 12, day: 8, keyOffset: 24 },
+      ];
 
-      if (mockSessionList.length === 0) {
-        mockSessionList = Object.values(MOCK_SESSIONS).map((s) => ({
-          ...s.session,
+      const mockSessionList = templates.map((t) => {
+        const monthStr = String(t.month).padStart(2, "0");
+        const dayStr = String(t.day).padStart(2, "0");
+        return {
+          session_key: selectedYear * 1000 + t.keyOffset,
+          session_name: "Race",
+          session_type: "Race",
+          meeting_key: selectedYear * 100 + t.keyOffset,
+          meeting_name: `${t.name} (${selectedYear})`,
+          location: t.location,
+          country_name: t.country,
           year: selectedYear,
-          meeting_name: `${s.session.meeting_name} (${selectedYear})`
-        }));
-      }
-
-      mockSessionList.sort((a, b) => new Date(b.date_start).getTime() - new Date(a.date_start).getTime());
+          date_start: `${selectedYear}-${monthStr}-${dayStr}T14:00:00Z`
+        };
+      }).sort((a, b) => new Date(b.date_start).getTime() - new Date(a.date_start).getTime());
 
       setSessionList(mockSessionList);
       setIsDemoData(true);
@@ -398,10 +428,16 @@ export default function App() {
       }
     } catch (err) {
       console.warn("API Offline or hosted statically - running safe local F1 telemetry loader...", err);
-      const mockKey = MOCK_SESSIONS[key] ? key : 9507;
+      const isFallbackKey = key >= 2010000 && key <= 2027000;
+      let matchedSession = sessionList.find((s) => Number(s.session_key) === key);
+      
+      const keyOffset = key % 1000;
+      const baseKey = (keyOffset % 2 === 1) ? 9507 : 9541;
+      const mockKey = MOCK_SESSIONS[key] ? key : baseKey;
       const d = MOCK_SESSIONS[mockKey];
+      
       if (d) {
-        setSessionInfo(d.session);
+        setSessionInfo(matchedSession || d.session);
         setDrivers(d.drivers || []);
         setWeatherData(d.weather || []);
         setRaceEvents(d.events || []);
@@ -843,7 +879,7 @@ export default function App() {
                   <Calendar className="w-3.5 h-3.5 text-[#e10600]" /> Сезон гонок
                 </label>
                 <div className="flex bg-[#090a0f] p-1 rounded-xl border border-[#2c2f44] overflow-x-auto gap-1 scrollbar-thin">
-                  {[2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018].map((yr) => (
+                  {[2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011, 2010].map((yr) => (
                     <button
                       key={yr}
                       onClick={() => setSelectedYear(yr)}
@@ -1101,7 +1137,7 @@ export default function App() {
                     </div>
                   ) : (
                     <div className="w-full h-[260px] mt-2">
-                      <ResponsiveContainer width="100%" height="100%">
+                      <ResponsiveContainer width="100%" height={260}>
                         <LineChart
                           data={driverLaps.map((lap) => ({
                             lap: `L${lap.lap_number}`,
@@ -1300,7 +1336,7 @@ export default function App() {
                   <Calendar className="w-4 h-4" /> Сезон для загрузки зачетов
                 </label>
                 <div className="flex bg-[#090a0f] p-1 rounded-xl border border-[#2a2d41] overflow-x-auto scrollbar-thin">
-                  {[2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018].map((yr) => (
+                  {[2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011, 2010].map((yr) => (
                     <button
                       key={yr}
                       onClick={() => setJolpicaYear(yr)}
@@ -1593,7 +1629,7 @@ export default function App() {
                     </div>
                   ) : (
                     <div className="w-full h-[280px]">
-                      <ResponsiveContainer width="100%" height="100%">
+                      <ResponsiveContainer width="100%" height={280}>
                         <LineChart
                           data={ffTelemetryCached}
                           margin={{ top: 10, right: 10, left: -25, bottom: 5 }}
@@ -2245,7 +2281,7 @@ export default function App() {
                         </div>
                       ) : (
                         <div className="w-full h-[285px]">
-                          <ResponsiveContainer width="100%" height="100%">
+                          <ResponsiveContainer width="100%" height={285}>
                             <LineChart
                               data={combinedChartData}
                               margin={{ top: 10, right: 10, left: -25, bottom: 5 }}

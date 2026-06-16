@@ -312,7 +312,7 @@ app.get("/api/session-data", async (req, res) => {
   }
 
   // If sessionKey is one of our dynamic fallback calendar keys (e.g. 2025008)
-  const isFallbackKey = sessionKey >= 2018000 && sessionKey <= 2027000;
+  const isFallbackKey = sessionKey >= 2010000 && sessionKey <= 2027000;
   if (isFallbackKey) {
     const year = Math.floor(sessionKey / 1000);
     const keyOffset = sessionKey % 1000;
@@ -472,7 +472,7 @@ app.get("/api/driver-laps", async (req, res) => {
   }
 
   // If sKey is one of our dynamic fallback calendar keys (e.g. 2025008)
-  const isFallbackKey = sKey >= 2018000 && sKey <= 2027000;
+  const isFallbackKey = sKey >= 2010000 && sKey <= 2027000;
   if (isFallbackKey) {
     const keyOffset = sKey % 1000;
     const baseKey = (keyOffset % 2 === 1) ? 9507 : 9541;
