@@ -1,4 +1,4 @@
-import { getJolpicaRaceResults, getOpenF1SessionData } from "./_f1Api";
+import { getJolpicaRaceResults, getOpenF1SessionData } from "./_f1Api.ts";
 
 function norm(value: any) {
   return String(value || "")

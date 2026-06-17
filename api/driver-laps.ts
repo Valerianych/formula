@@ -1,4 +1,4 @@
-import { getOpenF1DriverLaps } from "./_f1Api";
+import { getOpenF1DriverLaps } from "./_f1Api.ts";
 
 export default async function handler(req: any, res: any) {
   const sessionKey = Number(req.query?.session_key);
