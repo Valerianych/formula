@@ -91,6 +91,10 @@ interface SessionInfo {
   country_name: string;
   year: number;
   date_start: string;
+  winner?: string;
+  winnerTeam?: string;
+  winnerTime?: string;
+  winnerLine?: string;
 }
 
 interface StandingDriver {
@@ -122,6 +126,30 @@ interface RaceResult {
   winnerAcronym: string;
   winnerTeam: string;
   time: string;
+}
+
+
+const API_CACHE_PREFIX = "f1_api_cache_v2";
+const API_CACHE_TTL_MS = 1000 * 60 * 30;
+
+function readApiCache<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(`${API_CACHE_PREFIX}:${key}`);
+    if (!raw) return null;
+    const cached = JSON.parse(raw);
+    if (!cached?.savedAt || Date.now() - cached.savedAt > API_CACHE_TTL_MS) return null;
+    return cached.value as T;
+  } catch {
+    return null;
+  }
+}
+
+function writeApiCache<T>(key: string, value: T) {
+  try {
+    localStorage.setItem(`${API_CACHE_PREFIX}:${key}`, JSON.stringify({ savedAt: Date.now(), value }));
+  } catch {
+    // Ignore storage quota/private mode errors.
+  }
 }
 
 const OPENF1_API_BASE = "https://api.openf1.org/v1";
@@ -459,13 +487,22 @@ export default function App() {
   const [isCompareLoading, setIsCompareLoading] = useState<boolean>(false);
 
   const loadDriverLapsForComparison = async (sessionKey: number, driverNumber: number): Promise<Lap[]> => {
+    const cacheKey = `laps:${sessionKey}:${driverNumber}`;
+    const cached = readApiCache<Lap[]>(cacheKey);
+    if (cached) return cached;
+
     try {
       const response = await fetch(`/api/driver-laps?session_key=${sessionKey}&driver_number=${driverNumber}`);
       const payload = await readJsonOrThrow(response);
-      return payload.success ? (payload.laps || []) : [];
+      const laps = payload.success ? (payload.laps || []) : [];
+      writeApiCache(cacheKey, laps);
+      return laps;
     } catch (err) {
       console.warn("Backend comparison laps failed; trying OpenF1 directly.", err);
-      return fetchOpenF1DriverLapsDirect(sessionKey, driverNumber).catch((directErr) => {
+      return fetchOpenF1DriverLapsDirect(sessionKey, driverNumber).then((laps) => {
+        writeApiCache(cacheKey, laps);
+        return laps;
+      }).catch((directErr) => {
         console.warn("OpenF1 direct comparison laps failed.", directErr);
         return [];
       });
@@ -517,11 +554,19 @@ export default function App() {
   const fetchSessions = async () => {
     setSessionsLoading(true);
     setErrorMessage("");
+    const cacheKey = `sessions:${selectedYear}`;
+    const cachedSessions = readApiCache<SessionInfo[]>(cacheKey);
+    if (cachedSessions?.length) {
+      setSessionList(cachedSessions);
+      setIsDemoData(false);
+      if (!selectedSessionKey) setSelectedSessionKey(cachedSessions[0].session_key);
+    }
     try {
       const res = await fetch(`/api/sessions?year=${selectedYear}`);
       const data = await readJsonOrThrow(res);
       if (data.success) {
         setSessionList(data.sessions || []);
+        if (data.sessions?.length) writeApiCache(cacheKey, data.sessions);
         setIsDemoData(data.isDemo || false);
         if (data.sessions && data.sessions.length > 0) {
           setSelectedSessionKey(data.sessions[0].session_key);
@@ -542,6 +587,7 @@ export default function App() {
       try {
         const sessions = await fetchOpenF1SessionsDirect(selectedYear);
         setSessionList(sessions);
+        if (sessions.length) writeApiCache(cacheKey, sessions);
         setIsDemoData(false);
         if (sessions.length > 0) {
           setSelectedSessionKey(sessions[0].session_key);
@@ -590,6 +636,15 @@ export default function App() {
     setBestLapTime(null);
     setAvgLapTime(null);
     setAiAnalysis("");
+    const cacheKey = `session-data:${key}`;
+    const cachedData = readApiCache<any>(cacheKey);
+    if (cachedData?.session) {
+      setSessionInfo(cachedData.session);
+      setDrivers(cachedData.drivers || []);
+      setWeatherData(cachedData.weather || []);
+      setRaceEvents(cachedData.events || []);
+      setIsDemoData(false);
+    }
     
     try {
       const res = await fetch(`/api/session-data?session_key=${key}`);
@@ -601,6 +656,7 @@ export default function App() {
         setDrivers(d.drivers || []);
         setWeatherData(d.weather || []);
         setRaceEvents(d.events || []);
+        if (d.session) writeApiCache(cacheKey, d);
         setIsDemoData(payload.isDemo || false);
 
         // Auto select Charles or Lando or Verstappen or first driver
@@ -619,6 +675,7 @@ export default function App() {
         setDrivers(d.drivers || []);
         setWeatherData(d.weather || []);
         setRaceEvents(d.events || []);
+        if (d.session) writeApiCache(cacheKey, d);
         setIsDemoData(false);
 
         if (d.drivers && d.drivers.length > 0) {
@@ -650,12 +707,24 @@ export default function App() {
 
   const loadDriverLaps = async (sessKey: number, dNum: number) => {
     setLapsLoading(true);
+    const cacheKey = `laps:${sessKey}:${dNum}`;
+    const cachedLaps = readApiCache<Lap[]>(cacheKey);
+    if (cachedLaps) {
+      setDriverLaps(cachedLaps);
+      const realLaps = cachedLaps.filter((l: Lap) => l.lap_duration && l.lap_duration > 0);
+      if (realLaps.length > 0) {
+        const times = realLaps.map((l: Lap) => l.lap_duration as number);
+        setBestLapTime(Math.min(...times));
+        setAvgLapTime(times.reduce((a, b) => a + b, 0) / times.length);
+      }
+    }
     try {
       const res = await fetch(`/api/driver-laps?session_key=${sessKey}&driver_number=${dNum}`);
       const payload = await readJsonOrThrow(res);
       if (payload.success) {
         const laps = payload.laps || [];
         setDriverLaps(laps);
+        writeApiCache(cacheKey, laps);
 
         // Stats calculus
         const realLaps = laps.filter((l: Lap) => l.lap_duration && l.lap_duration > 0);
@@ -675,6 +744,7 @@ export default function App() {
       try {
         const laps = await fetchOpenF1DriverLapsDirect(sessKey, dNum);
         setDriverLaps(laps);
+        writeApiCache(cacheKey, laps);
         const realLaps = laps.filter((l: Lap) => l.lap_duration && l.lap_duration > 0);
         if (realLaps.length > 0) {
           const times = realLaps.map((l: Lap) => l.lap_duration as number);
@@ -705,6 +775,13 @@ export default function App() {
   const loadJolpicaStandingsAndResults = async () => {
     setStandingsLoading(true);
     setCalendarLoading(true);
+    const cacheKey = `standings-results:${jolpicaYear}`;
+    const cachedStandings = readApiCache<any>(cacheKey);
+    if (cachedStandings) {
+      setStandingDrivers(cachedStandings.drivers || []);
+      setStandingConstructors(cachedStandings.constructors || []);
+      setSeasonRaces(cachedStandings.races || []);
+    }
     try {
       // Standing API Request
       const stdRes = await fetch(`/api/standings?year=${jolpicaYear}`);
@@ -721,6 +798,7 @@ export default function App() {
       const calPayload = await readJsonOrThrow(calRes);
       if (calPayload.success) {
         setSeasonRaces(calPayload.races || []);
+        writeApiCache(cacheKey, { drivers: stdPayload.drivers || [], constructors: stdPayload.constructors || [], races: calPayload.races || [] });
       } else {
         throw new Error("Results API returned failure");
       }
@@ -734,6 +812,7 @@ export default function App() {
         setStandingDrivers(standings.drivers || []);
         setStandingConstructors(standings.constructors || []);
         setSeasonRaces(races || []);
+        writeApiCache(cacheKey, { drivers: standings.drivers || [], constructors: standings.constructors || [], races: races || [] });
       } catch (directErr) {
         console.warn("Jolpica direct request failed; no generated standings/results will be used.", directErr);
         setStandingDrivers([]);
@@ -1127,6 +1206,11 @@ ${weatherData.length ? `Погода OpenF1: трасса **${weatherData[weathe
                     <span className="text-xs font-black text-white mt-1 block uppercase">
                       {sessionInfo ? `${sessionInfo.meeting_name} • ${sessionInfo.location}` : "Сессия не загружается"}
                     </span>
+                    {sessionInfo?.winner && (
+                      <span className="text-[10px] text-amber-300 font-mono mt-1 block uppercase">
+                        🥇 Победитель: {sessionInfo.winner} {sessionInfo.winnerTeam ? `(${sessionInfo.winnerTeam})` : ""}
+                      </span>
+                    )}
                   </div>
                   <div className="text-right">
                     <span className="text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono px-2 py-1 rounded font-bold uppercase tracking-wider block">
@@ -1407,7 +1491,7 @@ ${weatherData.length ? `Погода OpenF1: трасса **${weatherData[weathe
                       <Sparkles className="w-4.5 h-4.5 text-[#e10600] animate-pulse" />
                       <div>
                         <h3 className="text-xs font-black uppercase text-white tracking-widest flex items-center gap-1">ИИ-Резидент: Формульный Аналитик</h3>
-                        <p className="text-[9px] text-[#e10600] font-mono font-bold uppercase">Провайдер: Google Gemini 3.5-Flash</p>
+                        <p className="text-[9px] text-[#e10600] font-mono font-bold uppercase">Провайдер: GigaChat / Gemini / API fallback</p>
                       </div>
                     </div>
                     <button
