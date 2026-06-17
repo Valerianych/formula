@@ -54,6 +54,9 @@ interface Driver {
   team_name: string;
   team_colour: string;
   headshot_url: string;
+  finishing_position?: number | null;
+  classified_laps?: number | null;
+  gap_to_leader?: number | string | null;
 }
 
 interface Lap {
@@ -220,17 +223,33 @@ async function fetchOpenF1SessionsDirect(year: number): Promise<SessionInfo[]> {
 }
 
 async function fetchOpenF1SessionDataDirect(sessionKey: number) {
-  const [sessions, drivers, weather, raceControl] = await Promise.all([
+  const [sessions, drivers, weather, raceControl, sessionResult] = await Promise.all([
     fetchJsonFromSource(`${OPENF1_API_BASE}/sessions?session_key=${sessionKey}`).catch(() => []),
     fetchJsonFromSource(`${OPENF1_API_BASE}/drivers?session_key=${sessionKey}`).catch(() => []),
     fetchJsonFromSource(`${OPENF1_API_BASE}/weather?session_key=${sessionKey}`).catch(() => []),
     fetchJsonFromSource(`${OPENF1_API_BASE}/race_control?session_key=${sessionKey}`).catch(() => []),
+    fetchJsonFromSource(`${OPENF1_API_BASE}/session_result?session_key=${sessionKey}`).catch(() => []),
   ]);
 
   const session = Array.isArray(sessions) && sessions.length > 0 ? formatOpenF1Session(sessions[0]) : null;
+  const resultByDriver = new Map((Array.isArray(sessionResult) ? sessionResult : []).map((item: any) => [item.driver_number, item]));
   const formattedDrivers = (Array.isArray(drivers) ? drivers : [])
-    .map(formatOpenF1Driver)
-    .filter((driver: Driver, index: number, self: Driver[]) => index === self.findIndex((item) => item.driver_number === driver.driver_number));
+    .map((driver: any) => {
+      const formatted = formatOpenF1Driver(driver);
+      const result = resultByDriver.get(driver.driver_number) as any;
+      return {
+        ...formatted,
+        finishing_position: result?.position || null,
+        classified_laps: result?.number_of_laps || null,
+        gap_to_leader: result?.gap_to_leader ?? null,
+      };
+    })
+    .filter((driver: Driver, index: number, self: Driver[]) => index === self.findIndex((item) => item.driver_number === driver.driver_number))
+    .sort((a: Driver, b: Driver) => {
+      const posA = a.finishing_position || Number.MAX_SAFE_INTEGER;
+      const posB = b.finishing_position || Number.MAX_SAFE_INTEGER;
+      return posA - posB || a.driver_number - b.driver_number;
+    });
 
   const rawWeather = Array.isArray(weather) ? weather : [];
   const step = Math.max(1, Math.floor(rawWeather.length / 12));
@@ -1052,7 +1071,7 @@ ${weatherData.length ? `Погода OpenF1: трасса **${weatherData[weathe
                 </span>
               </div>
               <p className="text-[11px] text-gray-400 font-medium">
-                OpenF1 telemetry • Jolpica standings/results
+                OpenF1 telemetry • AI race commentator
               </p>
             </div>
           </div>
@@ -1061,8 +1080,7 @@ ${weatherData.length ? `Погода OpenF1: трасса **${weatherData[weathe
           <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
             <nav className="flex bg-[#161824] p-1.5 rounded-xl border border-[#2d3142] w-full sm:w-auto max-w-2xl overflow-x-auto scrollbar-none">
               {[
-                { id: "telemetry", label: "Телеметрия Hub", icon: Activity, desc: "OpenF1 Live" },
-                { id: "standings", label: "Таблицы & Результаты", icon: Award, desc: "Jolpica API" }
+                { id: "telemetry", label: "Телеметрия Hub", icon: Activity, desc: "OpenF1 Live" }
               ].map((tab) => {
                 const IsSelected = activeTab === tab.id;
                 const Icon = tab.icon;
@@ -1369,6 +1387,7 @@ ${weatherData.length ? `Погода OpenF1: трасса **${weatherData[weathe
                         <div>
                           <div className="text-xs font-black uppercase text-white truncate max-w-[110px]">{d.broadcast_name}</div>
                           <div className="text-[9px] text-gray-400 font-medium truncate max-w-[110px]">{d.team_name}</div>
+                          <div className="text-[8px] text-amber-300 font-mono uppercase">{d.finishing_position ? `Финиш P${d.finishing_position}` : "результат OpenF1"}</div>
                         </div>
                       </button>
                     );
@@ -2186,12 +2205,10 @@ ${weatherData.length ? `Погода OpenF1: трасса **${weatherData[weathe
       <footer className="bg-black py-6 px-6 border-t border-[#181a24] text-xs">
         <div className="max-w-[1720px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-gray-500 font-mono select-none">
           <div className="text-[10px] font-black tracking-widest uppercase italic">
-            F1 API DATA CENTER • OPENF1 + JOLPICA
+            F1 API DATA CENTER • OPENF1 TELEMETRY
           </div>
           <div className="flex items-center gap-5">
             <a href="https://openf1.org" target="_blank" rel="noreferrer" className="hover:text-[#e10600] transition">OpenF1 API</a>
-            <span>|</span>
-            <a href="https://jolpi.ca" target="_blank" rel="noreferrer" className="hover:text-[#e10600] transition">Jolpica F1 SDK</a>
           </div>
           <div className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-[#e10600] block animate-pulse"></span>

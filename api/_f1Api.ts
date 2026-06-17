@@ -41,11 +41,12 @@ export async function getOpenF1Sessions(year: number) {
 }
 
 export async function getOpenF1SessionData(sessionKey: number) {
-  const [sessions, drivers, weather, raceControl] = await Promise.all([
+  const [sessions, drivers, weather, raceControl, sessionResult] = await Promise.all([
     fetchJson(`${OPENF1_BASE}/sessions?session_key=${sessionKey}`).catch(() => []),
     fetchJson(`${OPENF1_BASE}/drivers?session_key=${sessionKey}`).catch(() => []),
     fetchJson(`${OPENF1_BASE}/weather?session_key=${sessionKey}`).catch(() => []),
     fetchJson(`${OPENF1_BASE}/race_control?session_key=${sessionKey}`).catch(() => []),
+    fetchJson(`${OPENF1_BASE}/session_result?session_key=${sessionKey}`).catch(() => []),
   ]);
 
   const sessionInfo = Array.isArray(sessions) && sessions.length > 0 ? sessions[0] : null;
@@ -53,19 +54,31 @@ export async function getOpenF1SessionData(sessionKey: number) {
     return null;
   }
 
-  const formattedDrivers = (Array.isArray(drivers) ? drivers : []).map((driver: any) => ({
-    driver_number: driver.driver_number,
-    broadcast_name: driver.broadcast_name || driver.last_name || "Unknown",
-    full_name: driver.full_name || `${driver.first_name || ""} ${driver.last_name || ""}`.trim() || driver.broadcast_name || "Unknown driver",
-    name_acronym: driver.name_acronym || driver.broadcast_name?.substring(0, 3).toUpperCase() || "F1",
-    team_name: driver.team_name || "F1 Team",
-    team_colour: driver.team_colour || "E10600",
-    headshot_url: driver.headshot_url || "https://media.formula1.com/d_driver_fallback_image.png",
-  }));
+  const resultByDriver = new Map((Array.isArray(sessionResult) ? sessionResult : []).map((item: any) => [item.driver_number, item]));
+
+  const formattedDrivers = (Array.isArray(drivers) ? drivers : []).map((driver: any) => {
+    const result = resultByDriver.get(driver.driver_number) as any;
+    return {
+      driver_number: driver.driver_number,
+      broadcast_name: driver.broadcast_name || driver.last_name || "Unknown",
+      full_name: driver.full_name || `${driver.first_name || ""} ${driver.last_name || ""}`.trim() || driver.broadcast_name || "Unknown driver",
+      name_acronym: driver.name_acronym || driver.broadcast_name?.substring(0, 3).toUpperCase() || "F1",
+      team_name: driver.team_name || "F1 Team",
+      team_colour: driver.team_colour || "E10600",
+      headshot_url: driver.headshot_url || "https://media.formula1.com/d_driver_fallback_image.png",
+      finishing_position: result?.position || null,
+      classified_laps: result?.number_of_laps || null,
+      gap_to_leader: result?.gap_to_leader ?? null,
+    };
+  });
 
   const uniqueDrivers = formattedDrivers.filter((driver: any, index: number, self: any[]) => (
     index === self.findIndex((item) => item.driver_number === driver.driver_number)
-  ));
+  )).sort((a: any, b: any) => {
+    const posA = a.finishing_position || Number.MAX_SAFE_INTEGER;
+    const posB = b.finishing_position || Number.MAX_SAFE_INTEGER;
+    return posA - posB || a.driver_number - b.driver_number;
+  });
 
   const rawWeather = Array.isArray(weather) ? weather : [];
   const step = Math.max(1, Math.floor(rawWeather.length / 12));
