@@ -1,4 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { GoogleGenAI } from "@google/genai";
+
+let gigaChatTokenCache: { token: string; expiresAt: number } | null = null;
 
 function formatTime(sec: number | null) {
   if (!sec) return "—";
@@ -7,8 +10,48 @@ function formatTime(sec: number | null) {
   return mins > 0 ? `${mins}:${remainingSecs.padStart(6, "0")}` : `${remainingSecs}с`;
 }
 
+async function getGigaChatAccessToken() {
+  if (process.env.GIGACHAT_ACCESS_TOKEN) {
+    return process.env.GIGACHAT_ACCESS_TOKEN;
+  }
+
+  if (gigaChatTokenCache && Date.now() < gigaChatTokenCache.expiresAt - 60_000) {
+    return gigaChatTokenCache.token;
+  }
+
+  const authorizationKey = process.env.GIGACHAT_AUTH_KEY || process.env.GIGACHAT_CREDENTIALS;
+  if (!authorizationKey) return null;
+
+  const response = await fetch(process.env.GIGACHAT_OAUTH_URL || "https://ngw.devices.sberbank.ru:9443/api/v2/oauth", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+      RqUID: randomUUID(),
+      Authorization: `Basic ${authorizationKey}`,
+    },
+    body: new URLSearchParams({ scope: process.env.GIGACHAT_SCOPE || "GIGACHAT_API_PERS" }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`GigaChat OAuth returned ${response.status}`);
+  }
+
+  const payload = await response.json();
+  if (!payload?.access_token) {
+    throw new Error("GigaChat OAuth did not return access_token");
+  }
+
+  gigaChatTokenCache = {
+    token: payload.access_token,
+    expiresAt: payload.expires_at ? Number(payload.expires_at) : Date.now() + 25 * 60_000,
+  };
+
+  return gigaChatTokenCache.token;
+}
+
 async function generateWithGigaChat(prompt: string) {
-  const token = process.env.GIGACHAT_ACCESS_TOKEN;
+  const token = await getGigaChatAccessToken();
   if (!token) return null;
 
   const response = await fetch(`${process.env.GIGACHAT_API_BASE || "https://gigachat.devices.sberbank.ru/api/v1"}/chat/completions`, {
@@ -80,6 +123,7 @@ export default async function handler(req: any, res: any) {
   } catch (error: any) {
     return res.status(200).json({
       success: true,
+      provider: "factual-fallback",
       analysis: factualFallback,
     });
   }
