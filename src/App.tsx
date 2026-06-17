@@ -404,6 +404,8 @@ export default function App() {
   const [bestLapTime, setBestLapTime] = useState<number | null>(null);
   const [avgLapTime, setAvgLapTime] = useState<number | null>(null);
   const [aiAnalysis, setAiAnalysis] = useState<string>("");
+  const [aiChatInput, setAiChatInput] = useState<string>("");
+  const [aiChatMessages, setAiChatMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([]);
   
   // Jolpica Standing Tab States
   const [jolpicaYear, setJolpicaYear] = useState<number>(2025);
@@ -456,30 +458,39 @@ export default function App() {
   const [compareLapsB, setCompareLapsB] = useState<Lap[]>([]);
   const [isCompareLoading, setIsCompareLoading] = useState<boolean>(false);
 
+  const loadDriverLapsForComparison = async (sessionKey: number, driverNumber: number): Promise<Lap[]> => {
+    try {
+      const response = await fetch(`/api/driver-laps?session_key=${sessionKey}&driver_number=${driverNumber}`);
+      const payload = await readJsonOrThrow(response);
+      return payload.success ? (payload.laps || []) : [];
+    } catch (err) {
+      console.warn("Backend comparison laps failed; trying OpenF1 directly.", err);
+      return fetchOpenF1DriverLapsDirect(sessionKey, driverNumber).catch((directErr) => {
+        console.warn("OpenF1 direct comparison laps failed.", directErr);
+        return [];
+      });
+    }
+  };
+
   const fetchComparisonData = async (drvA: Driver | null, drvB: Driver | null) => {
     if (!selectedSessionKey || !drvA || !drvB) return;
     setIsCompareLoading(true);
+    setCompareLapsA([]);
+    setCompareLapsB([]);
     try {
-      const [resA, resB] = await Promise.all([
-        fetch(`/api/driver-laps?session_key=${selectedSessionKey}&driver_number=${drvA.driver_number}`).then(r => r.json()),
-        fetch(`/api/driver-laps?session_key=${selectedSessionKey}&driver_number=${drvB.driver_number}`).then(r => r.json())
+      const [lapsA, lapsB] = await Promise.all([
+        loadDriverLapsForComparison(Number(selectedSessionKey), drvA.driver_number),
+        loadDriverLapsForComparison(Number(selectedSessionKey), drvB.driver_number),
       ]);
-      
-      if (resA.success) {
-        setCompareLapsA(resA.laps || []);
-      }
-      if (resB.success) {
-        setCompareLapsB(resB.laps || []);
-      }
-    } catch (err) {
-      console.error("Error fetching comparison laps:", err);
+      setCompareLapsA(lapsA);
+      setCompareLapsB(lapsB);
     } finally {
       setIsCompareLoading(false);
     }
   };
 
   useEffect(() => {
-    if (isCompareModalOpen && compareDriverA && compareDriverB) {
+    if (isCompareModalOpen && compareDriverA && compareDriverB && selectedSessionKey) {
       fetchComparisonData(compareDriverA, compareDriverB);
     }
   }, [isCompareModalOpen, compareDriverA?.driver_number, compareDriverB?.driver_number, selectedSessionKey]);
@@ -766,6 +777,7 @@ export default function App() {
           laps: driverLaps,
           weather: weatherData,
           events: raceEvents,
+          question: "Сделай короткий комментарий по текущей сессии",
         }),
       });
 
@@ -789,25 +801,46 @@ export default function App() {
         return mins > 0 ? `${mins}:${remainingSecs.padStart(6, "0")}` : `${remainingSecs}с`;
       };
 
-      setAiAnalysis(`### 🏁 F1 AI Анализ (Локальный режим)
+      setAiAnalysis(`### Комментарий по данным API
 
-Интегрированный локальный ИИ-анализатор изучил данные телеметрии и погодные сводки текущей сессии.
+Этап: **${sessionInfo.meeting_name}**. Пилот **${selectedDriver.full_name}** (${selectedDriver.team_name}).
 
-1. **Общий обзор сессии**
-   Заезды проходят на легендарной трассе **${sessionInfo.location}** (${sessionInfo.country_name}) в рамках этапа **${sessionInfo.meeting_name} ${sessionInfo.year}**. Динамические погодные условия требуют от инженеров ювелирного контроля температуры прогревочных чехлов и давления в шинах для максимального механического зацепа.
+Кругов с временем: **${validL.length}**. Лучший круг: **${formatTimeLocal(bL)}**. Средний темп: **${formatTimeLocal(aL)}**.
 
-2. **⏱ Анализ темпа пилотирования ${selectedDriver.name_acronym}**
-   Пилот **${selectedDriver.full_name}** из команды **${selectedDriver.team_name}** демонстрирует стабильный гоночный темп.
-   - Всего кругов в этой сессии: **${driverLaps.length}**
-   - Лучший круг пилота: **${formatTimeLocal(bL)}**
-   - Средний темп на длинной серии: **${formatTimeLocal(aL)}**
-   На машине под номером **#${selectedDriver.driver_number}** инженеры применили оптимальные аэродинамические настройки, чтобы минимизировать сопротивление воздуха на длинных прямых и сохранить прижимную силу в скоростных апексах.
+${weatherData.length ? `Погода OpenF1: трасса **${weatherData[weatherData.length - 1].track_temperature}°C**, воздух **${weatherData[weatherData.length - 1].air_temperature}°C**.` : "Погодные данные OpenF1 не загружены."}
 
-3. **🚧 Влияние гоночных инцидентов**
-   Анализ сообщений Race Control показывает стабильную работу пилота во время желтых флагов и фаз автомобилей безопасности. Гонщик мастерски использует точки активации DRS и грамотно реализует тактическую схему *undercut*, избегая чрезмерной тепловой деградации резины.
+ИИ-сервис сейчас недоступен, поэтому показан только фактологический разбор без выдуманных прогнозов.`)
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
-4. **💡 Резюме для зрителя**
-   Высокая стабильность секторов у **${selectedDriver.name_acronym}** говорит об отличной сбалансированности шасси ${selectedDriver.team_name}. Текущий гоночный темп пилота делает его одним из фаворитов в борьбе за подиум на этой трассе.`);
+  const sendAiChatMessage = async () => {
+    const question = aiChatInput.trim();
+    if (!question || !sessionInfo || !selectedDriver) return;
+
+    setAiChatMessages((items) => [...items, { role: "user", text: question }]);
+    setAiChatInput("");
+    setAiLoading(true);
+
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session: sessionInfo,
+          driver: selectedDriver,
+          laps: driverLaps,
+          weather: weatherData,
+          events: raceEvents,
+          question,
+        }),
+      });
+      const payload = await readJsonOrThrow(res);
+      setAiChatMessages((items) => [...items, { role: "assistant", text: payload.analysis || "Нет ответа от ИИ." }]);
+    } catch (err) {
+      console.warn("AI chat failed.", err);
+      setAiChatMessages((items) => [...items, { role: "assistant", text: "ИИ-чат сейчас недоступен. Данные OpenF1/Jolpica остаются на экране без подмены." }]);
     } finally {
       setAiLoading(false);
     }
@@ -1429,9 +1462,36 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="mt-4 p-2.5 bg-[#090a0f] rounded-lg text-[9px] text-gray-500 flex items-center justify-between font-mono border border-[#1b1c2b]">
-                  <span>Сводка: телеметрия + износ + погода</span>
-                  <span>КОНФИГУРАЦИЯ: AIR-PACE-PRO</span>
+                <div className="mt-4 border border-[#1b1c2b] bg-[#090a0f] rounded-xl p-3 space-y-3">
+                  <div className="text-[10px] font-black uppercase tracking-widest text-white flex items-center gap-2">
+                    <Sparkles className="w-3.5 h-3.5 text-[#e10600]" /> Чат с AI-комментатором
+                  </div>
+                  <div className="max-h-36 overflow-y-auto space-y-2 pr-1">
+                    {aiChatMessages.length === 0 ? (
+                      <p className="text-[10px] text-gray-500 font-mono">Задайте вопрос по загруженной сессии: темп, погода, круги, события Race Control. Ответ строится только по данным API.</p>
+                    ) : aiChatMessages.map((message, idx) => (
+                      <div key={idx} className={`text-[10px] font-mono p-2 rounded-lg border ${message.role === "user" ? "bg-[#1b1d2a] border-[#30344b] text-white" : "bg-black/20 border-[#24283b] text-gray-300"}`}>
+                        <span className="block text-[8px] uppercase text-[#e10600] mb-1">{message.role === "user" ? "Вы" : "AI-комментатор"}</span>
+                        {message.text.replace(/[#*]/g, "")}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      value={aiChatInput}
+                      onChange={(event) => setAiChatInput(event.target.value)}
+                      onKeyDown={(event) => { if (event.key === "Enter") sendAiChatMessage(); }}
+                      placeholder="Например: почему темп падает?"
+                      className="flex-1 bg-[#141520] border border-[#2a2d41] rounded-lg px-3 py-2 text-[11px] text-white outline-none focus:border-[#e10600]"
+                    />
+                    <button
+                      onClick={sendAiChatMessage}
+                      disabled={aiLoading || !selectedDriver || !aiChatInput.trim()}
+                      className="bg-[#e10600] disabled:opacity-40 text-white font-black uppercase text-[9px] px-3 rounded-lg"
+                    >
+                      Спросить
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -1494,7 +1554,7 @@ export default function App() {
                   <Calendar className="w-4 h-4" /> Сезон для загрузки зачетов
                 </label>
                 <div className="flex bg-[#090a0f] p-1 rounded-xl border border-[#2a2d41] overflow-x-auto scrollbar-thin">
-                  {[2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011, 2010].map((yr) => (
+                  {[2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011, 2010].map((yr) => (
                     <button
                       key={yr}
                       onClick={() => setJolpicaYear(yr)}
