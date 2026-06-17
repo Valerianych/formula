@@ -26,16 +26,9 @@
         throw new Error(`HTTP ${response.status}`);
       }
 
-      response.clone().json().then((payload) => {
-        if (payload?.error) {
-          showApiError(url, payload.error, payload.note || payload.source || "API вернул ошибку");
-        }
-      }).catch(() => null);
-
       return response;
     } catch (error) {
       const message = error?.message || "API request failed";
-      showApiError(url, message, "Данные не загрузились из внешнего источника.");
 
       return new Response(JSON.stringify(emptyPayload(url, message)), {
         status: 200,
