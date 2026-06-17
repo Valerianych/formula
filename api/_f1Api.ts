@@ -1,5 +1,5 @@
 const OPENF1_BASE = "https://api.openf1.org/v1";
-const JOLPICA_BASE = "https://api.jolpica.org/ergast/f1";
+const JOLPICA_BASE = "https://api.jolpi.ca/ergast/f1";
 
 export function parseYear(raw: unknown, fallback = 2025) {
   const year = Number(raw || fallback);

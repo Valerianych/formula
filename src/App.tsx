@@ -125,7 +125,7 @@ interface RaceResult {
 }
 
 const OPENF1_API_BASE = "https://api.openf1.org/v1";
-const JOLPICA_API_BASE = "https://api.jolpica.org/ergast/f1";
+const JOLPICA_API_BASE = "https://api.jolpi.ca/ergast/f1";
 
 async function readJsonOrThrow(response: Response) {
   if (!response.ok) {
@@ -940,7 +940,7 @@ export default function App() {
                 </span>
               </div>
               <p className="text-[11px] text-gray-400 font-medium">
-                OpenF1 • Jolpica F1 • FastF1 Overlay • F1DB Historical Engine (1950-2026)
+                OpenF1 telemetry • Jolpica standings/results
               </p>
             </div>
           </div>
@@ -950,9 +950,7 @@ export default function App() {
             <nav className="flex bg-[#161824] p-1.5 rounded-xl border border-[#2d3142] w-full sm:w-auto max-w-2xl overflow-x-auto scrollbar-none">
               {[
                 { id: "telemetry", label: "Телеметрия Hub", icon: Activity, desc: "OpenF1 Live" },
-                { id: "standings", label: "Таблицы & Результаты", icon: Award, desc: "Jolpica API" },
-                { id: "fastf1", label: "FastF1 Оверлей", icon: Sliders, desc: "Lap Analysis" },
-                { id: "f1db", label: "F1DB Архив 1950", icon: Trophy, desc: "Historical Stat" }
+                { id: "standings", label: "Таблицы & Результаты", icon: Award, desc: "Jolpica API" }
               ].map((tab) => {
                 const IsSelected = activeTab === tab.id;
                 const Icon = tab.icon;
@@ -2044,14 +2042,12 @@ export default function App() {
       <footer className="bg-black py-6 px-6 border-t border-[#181a24] text-xs">
         <div className="max-w-[1720px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-gray-500 font-mono select-none">
           <div className="text-[10px] font-black tracking-widest uppercase italic">
-            F1 METADATA CENTER PRO • ESTABLISHED 1950 - 2026
+            F1 API DATA CENTER • OPENF1 + JOLPICA
           </div>
           <div className="flex items-center gap-5">
             <a href="https://openf1.org" target="_blank" rel="noreferrer" className="hover:text-[#e10600] transition">OpenF1 API</a>
             <span>|</span>
-            <a href="https://jolpica.org" target="_blank" rel="noreferrer" className="hover:text-[#e10600] transition">Jolpica F1 SDK</a>
-            <span>|</span>
-            <a href="#" className="hover:text-[#e10600] transition">FastF1 Visualizer</a>
+            <a href="https://jolpi.ca" target="_blank" rel="noreferrer" className="hover:text-[#e10600] transition">Jolpica F1 SDK</a>
           </div>
           <div className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-[#e10600] block animate-pulse"></span>
