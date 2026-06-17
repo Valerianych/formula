@@ -900,15 +900,7 @@ export default function App() {
         return mins > 0 ? `${mins}:${remainingSecs.padStart(6, "0")}` : `${remainingSecs}с`;
       };
 
-      setAiAnalysis(`### Комментарий по данным API
-
-Этап: **${sessionInfo.meeting_name}**. Пилот **${selectedDriver.full_name}** (${selectedDriver.team_name}).
-
-Кругов с временем: **${validL.length}**. Лучший круг: **${formatTimeLocal(bL)}**. Средний темп: **${formatTimeLocal(aL)}**.
-
-${weatherData.length ? `Погода OpenF1: трасса **${weatherData[weatherData.length - 1].track_temperature}°C**, воздух **${weatherData[weatherData.length - 1].air_temperature}°C**.` : "Погодные данные OpenF1 не загружены."}
-
-ИИ-сервис сейчас недоступен, поэтому показан только фактологический разбор без выдуманных прогнозов.`)
+      
     } finally {
       setAiLoading(false);
     }
