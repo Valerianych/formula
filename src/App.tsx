@@ -44,7 +44,6 @@ import {
 } from "recharts";
 import { motion, AnimatePresence } from "motion/react";
 import { HISTORIC_DRIVERS, HISTORIC_CONSTRUCTORS, ALL_TIME_STATS } from "./f1db_data";
-import { MOCK_SESSIONS } from "./f1_mock";
 
 // Type declarations
 interface Driver {
@@ -55,6 +54,9 @@ interface Driver {
   team_name: string;
   team_colour: string;
   headshot_url: string;
+  finishing_position?: number | null;
+  classified_laps?: number | null;
+  gap_to_leader?: number | string | null;
 }
 
 interface Lap {
@@ -92,6 +94,10 @@ interface SessionInfo {
   country_name: string;
   year: number;
   date_start: string;
+  winner?: string;
+  winnerTeam?: string;
+  winnerTime?: string;
+  winnerLine?: string;
 }
 
 interface StandingDriver {
@@ -125,7 +131,205 @@ interface RaceResult {
   time: string;
 }
 
-// Simulated FastF1 telemetry coordinate points generator (for overlay tab)
+
+const API_CACHE_PREFIX = "f1_api_cache_v2";
+const API_CACHE_TTL_MS = 1000 * 60 * 30;
+
+function readApiCache<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(`${API_CACHE_PREFIX}:${key}`);
+    if (!raw) return null;
+    const cached = JSON.parse(raw);
+    if (!cached?.savedAt || Date.now() - cached.savedAt > API_CACHE_TTL_MS) return null;
+    return cached.value as T;
+  } catch {
+    return null;
+  }
+}
+
+function writeApiCache<T>(key: string, value: T) {
+  try {
+    localStorage.setItem(`${API_CACHE_PREFIX}:${key}`, JSON.stringify({ savedAt: Date.now(), value }));
+  } catch {
+    // Ignore storage quota/private mode errors.
+  }
+}
+
+const OPENF1_API_BASE = "https://api.openf1.org/v1";
+const JOLPICA_API_BASE = "https://api.jolpi.ca/ergast/f1";
+
+async function readJsonOrThrow(response: Response) {
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  const payload = await response.json();
+  if (payload?.error) {
+    throw new Error(payload.error);
+  }
+  return payload;
+}
+
+async function fetchJsonFromSource(url: string) {
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`External API returned HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+function formatOpenF1Session(session: any): SessionInfo {
+  return {
+    session_key: session.session_key,
+    session_name: session.session_name,
+    session_type: session.session_type || session.session_name,
+    meeting_key: session.meeting_key,
+    meeting_name: session.meeting_name || `${session.location} Grand Prix`,
+    location: session.location,
+    country_name: session.country_name,
+    year: session.year,
+    date_start: session.date_start,
+  };
+}
+
+function formatOpenF1Driver(driver: any): Driver {
+  return {
+    driver_number: driver.driver_number,
+    broadcast_name: driver.broadcast_name || driver.last_name || "Unknown",
+    full_name: driver.full_name || `${driver.first_name || ""} ${driver.last_name || ""}`.trim() || driver.broadcast_name || "Unknown driver",
+    name_acronym: driver.name_acronym || driver.broadcast_name?.substring(0, 3).toUpperCase() || "F1",
+    team_name: driver.team_name || "F1 Team",
+    team_colour: driver.team_colour || "E10600",
+    headshot_url: driver.headshot_url || "https://media.formula1.com/d_driver_fallback_image.png",
+  };
+}
+
+function formatOpenF1Lap(lap: any): Lap {
+  return {
+    lap_number: lap.lap_number,
+    lap_duration: lap.lap_duration || null,
+    duration_sector_1: lap.duration_sector_1 || null,
+    duration_sector_2: lap.duration_sector_2 || null,
+    duration_sector_3: lap.duration_sector_3 || null,
+    is_pit_out_lap: lap.is_pit_out_lap === 1 || lap.is_pit_out_lap === true,
+  };
+}
+
+async function fetchOpenF1SessionsDirect(year: number): Promise<SessionInfo[]> {
+  const data = await fetchJsonFromSource(`${OPENF1_API_BASE}/sessions?year=${year}`);
+  return (Array.isArray(data) ? data : [])
+    .filter((session: any) => ["Race", "Qualifying", "Sprint", "Sprint Shootout", "Sprint Qualifying"].includes(session.session_name))
+    .map(formatOpenF1Session)
+    .sort((a: SessionInfo, b: SessionInfo) => new Date(b.date_start).getTime() - new Date(a.date_start).getTime());
+}
+
+async function fetchOpenF1SessionDataDirect(sessionKey: number) {
+  const [sessions, drivers, weather, raceControl, sessionResult] = await Promise.all([
+    fetchJsonFromSource(`${OPENF1_API_BASE}/sessions?session_key=${sessionKey}`).catch(() => []),
+    fetchJsonFromSource(`${OPENF1_API_BASE}/drivers?session_key=${sessionKey}`).catch(() => []),
+    fetchJsonFromSource(`${OPENF1_API_BASE}/weather?session_key=${sessionKey}`).catch(() => []),
+    fetchJsonFromSource(`${OPENF1_API_BASE}/race_control?session_key=${sessionKey}`).catch(() => []),
+    fetchJsonFromSource(`${OPENF1_API_BASE}/session_result?session_key=${sessionKey}`).catch(() => []),
+  ]);
+
+  const session = Array.isArray(sessions) && sessions.length > 0 ? formatOpenF1Session(sessions[0]) : null;
+  const resultByDriver = new Map((Array.isArray(sessionResult) ? sessionResult : []).map((item: any) => [item.driver_number, item]));
+  const formattedDrivers = (Array.isArray(drivers) ? drivers : [])
+    .map((driver: any) => {
+      const formatted = formatOpenF1Driver(driver);
+      const result = resultByDriver.get(driver.driver_number) as any;
+      return {
+        ...formatted,
+        finishing_position: result?.position || null,
+        classified_laps: result?.number_of_laps || null,
+        gap_to_leader: result?.gap_to_leader ?? null,
+      };
+    })
+    .filter((driver: Driver, index: number, self: Driver[]) => index === self.findIndex((item) => item.driver_number === driver.driver_number))
+    .sort((a: Driver, b: Driver) => {
+      const posA = a.finishing_position || Number.MAX_SAFE_INTEGER;
+      const posB = b.finishing_position || Number.MAX_SAFE_INTEGER;
+      return posA - posB || a.driver_number - b.driver_number;
+    });
+
+  const rawWeather = Array.isArray(weather) ? weather : [];
+  const step = Math.max(1, Math.floor(rawWeather.length / 12));
+  const formattedWeather = rawWeather.filter((_: any, index: number) => index % step === 0).map((item: any) => ({
+    date: item.date,
+    air_temperature: item.air_temperature,
+    track_temperature: item.track_temperature,
+    humidity: item.humidity,
+    rainfall: item.rainfall,
+  }));
+
+  const events = (Array.isArray(raceControl) ? raceControl : []).map((event: any) => ({
+    date: event.date,
+    lap_number: event.lap_number || null,
+    category: event.category || "Status",
+    message: event.message || "",
+    flag: event.flag || null,
+  })).slice(0, 30);
+
+  return { session, drivers: formattedDrivers, weather: formattedWeather, events, laps: {} };
+}
+
+async function fetchOpenF1DriverLapsDirect(sessionKey: number, driverNumber: number): Promise<Lap[]> {
+  const data = await fetchJsonFromSource(`${OPENF1_API_BASE}/laps?session_key=${sessionKey}&driver_number=${driverNumber}`);
+  return (Array.isArray(data) ? data : []).map(formatOpenF1Lap).filter((lap: Lap) => lap.lap_duration && lap.lap_duration > 0);
+}
+
+async function fetchJolpicaStandingsDirect(year: number) {
+  const [driversData, constructorsData] = await Promise.all([
+    fetchJsonFromSource(`${JOLPICA_API_BASE}/${year}/driverStandings.json`),
+    fetchJsonFromSource(`${JOLPICA_API_BASE}/${year}/constructorStandings.json`),
+  ]);
+
+  const driverList = driversData?.MRData?.StandingsTable?.StandingsLists?.[0]?.DriverStandings || [];
+  const constructorList = constructorsData?.MRData?.StandingsTable?.StandingsLists?.[0]?.ConstructorStandings || [];
+
+  return {
+    drivers: driverList.map((item: any) => ({
+      position: Number(item.position),
+      points: Number(item.points),
+      wins: Number(item.wins),
+      driverName: `${item.Driver.givenName} ${item.Driver.familyName}`,
+      driverAcronym: item.Driver.code || item.Driver.familyName.substring(0, 3).toUpperCase(),
+      nationality: item.Driver.nationality,
+      teamName: item.Constructors?.[0]?.name || "—",
+    })),
+    constructors: constructorList.map((item: any) => ({
+      position: Number(item.position),
+      points: Number(item.points),
+      wins: Number(item.wins),
+      teamName: item.Constructor.name,
+      nationality: item.Constructor.nationality,
+    })),
+  };
+}
+
+async function fetchJolpicaRaceResultsDirect(year: number): Promise<RaceResult[]> {
+  const data = await fetchJsonFromSource(`${JOLPICA_API_BASE}/${year}/results/1.json`);
+  const races = data?.MRData?.RaceTable?.Races || [];
+
+  return races.map((race: any) => {
+    const winnerResult = race.Results?.[0];
+    const winner = winnerResult ? `${winnerResult.Driver.givenName} ${winnerResult.Driver.familyName}` : "Победитель пока не указан";
+    const winnerTeam = winnerResult?.Constructor?.name || "—";
+    return {
+      round: Number(race.round),
+      raceName: race.raceName,
+      circuitName: race.Circuit?.circuitName || "—",
+      locality: race.Circuit?.Location?.locality || "—",
+      country: race.Circuit?.Location?.country || "—",
+      date: race.date,
+      winner,
+      winnerAcronym: winnerResult?.Driver?.code || winner.split(" ").map((part) => part[0]).join("").slice(0, 3).toUpperCase(),
+      winnerTeam,
+      time: winnerResult?.Time?.time || "Finished",
+    };
+  });
+}
+
+// FastF1 telemetry overlay placeholder: values are isolated from OpenF1/Jolpica API views
 function generateFastF1LapData(driverA: string, driverB: string, param: "speed" | "throttle" | "brake" | "gear") {
   const points = [];
   const totalDistance = 5200; // Monaco to Silverstone typical telemetry points
@@ -247,6 +451,8 @@ export default function App() {
   const [bestLapTime, setBestLapTime] = useState<number | null>(null);
   const [avgLapTime, setAvgLapTime] = useState<number | null>(null);
   const [aiAnalysis, setAiAnalysis] = useState<string>("");
+  const [aiChatInput, setAiChatInput] = useState<string>("");
+  const [aiChatMessages, setAiChatMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([]);
   
   // Jolpica Standing Tab States
   const [jolpicaYear, setJolpicaYear] = useState<number>(2025);
@@ -299,30 +505,48 @@ export default function App() {
   const [compareLapsB, setCompareLapsB] = useState<Lap[]>([]);
   const [isCompareLoading, setIsCompareLoading] = useState<boolean>(false);
 
+  const loadDriverLapsForComparison = async (sessionKey: number, driverNumber: number): Promise<Lap[]> => {
+    const cacheKey = `laps:${sessionKey}:${driverNumber}`;
+    const cached = readApiCache<Lap[]>(cacheKey);
+    if (cached) return cached;
+
+    try {
+      const response = await fetch(`/api/driver-laps?session_key=${sessionKey}&driver_number=${driverNumber}`);
+      const payload = await readJsonOrThrow(response);
+      const laps = payload.success ? (payload.laps || []) : [];
+      writeApiCache(cacheKey, laps);
+      return laps;
+    } catch (err) {
+      console.warn("Backend comparison laps failed; trying OpenF1 directly.", err);
+      return fetchOpenF1DriverLapsDirect(sessionKey, driverNumber).then((laps) => {
+        writeApiCache(cacheKey, laps);
+        return laps;
+      }).catch((directErr) => {
+        console.warn("OpenF1 direct comparison laps failed.", directErr);
+        return [];
+      });
+    }
+  };
+
   const fetchComparisonData = async (drvA: Driver | null, drvB: Driver | null) => {
     if (!selectedSessionKey || !drvA || !drvB) return;
     setIsCompareLoading(true);
+    setCompareLapsA([]);
+    setCompareLapsB([]);
     try {
-      const [resA, resB] = await Promise.all([
-        fetch(`/api/driver-laps?session_key=${selectedSessionKey}&driver_number=${drvA.driver_number}`).then(r => r.json()),
-        fetch(`/api/driver-laps?session_key=${selectedSessionKey}&driver_number=${drvB.driver_number}`).then(r => r.json())
+      const [lapsA, lapsB] = await Promise.all([
+        loadDriverLapsForComparison(Number(selectedSessionKey), drvA.driver_number),
+        loadDriverLapsForComparison(Number(selectedSessionKey), drvB.driver_number),
       ]);
-      
-      if (resA.success) {
-        setCompareLapsA(resA.laps || []);
-      }
-      if (resB.success) {
-        setCompareLapsB(resB.laps || []);
-      }
-    } catch (err) {
-      console.error("Error fetching comparison laps:", err);
+      setCompareLapsA(lapsA);
+      setCompareLapsB(lapsB);
     } finally {
       setIsCompareLoading(false);
     }
   };
 
   useEffect(() => {
-    if (isCompareModalOpen && compareDriverA && compareDriverB) {
+    if (isCompareModalOpen && compareDriverA && compareDriverB && selectedSessionKey) {
       fetchComparisonData(compareDriverA, compareDriverB);
     }
   }, [isCompareModalOpen, compareDriverA?.driver_number, compareDriverB?.driver_number, selectedSessionKey]);
@@ -340,7 +564,7 @@ export default function App() {
   };
 
   // ========================================================
-  // 1. Core Loader: Year sessions (OpenF1 / Fallback)
+  // 1. Core Loader: Year sessions (OpenF1 only)
   // ========================================================
   useEffect(() => {
     fetchSessions();
@@ -349,11 +573,19 @@ export default function App() {
   const fetchSessions = async () => {
     setSessionsLoading(true);
     setErrorMessage("");
+    const cacheKey = `sessions:${selectedYear}`;
+    const cachedSessions = readApiCache<SessionInfo[]>(cacheKey);
+    if (cachedSessions?.length) {
+      setSessionList(cachedSessions);
+      setIsDemoData(false);
+      if (!selectedSessionKey) setSelectedSessionKey(cachedSessions[0].session_key);
+    }
     try {
       const res = await fetch(`/api/sessions?year=${selectedYear}`);
-      const data = await res.json();
+      const data = await readJsonOrThrow(res);
       if (data.success) {
         setSessionList(data.sessions || []);
+        if (data.sessions?.length) writeApiCache(cacheKey, data.sessions);
         setIsDemoData(data.isDemo || false);
         if (data.sessions && data.sessions.length > 0) {
           setSelectedSessionKey(data.sessions[0].session_key);
@@ -370,57 +602,35 @@ export default function App() {
         throw new Error("API returned failure");
       }
     } catch (err) {
-      console.warn("API Offline or hosted statically - running safe local F1 fallback calendar...", err);
-      
-      const templates = [
-        { name: "Bahrain Grand Prix", location: "Sakhir", country: "Bahrain", month: 3, day: 2, keyOffset: 1 },
-        { name: "Saudi Arabian Grand Prix", location: "Jeddah", country: "Saudi Arabia", month: 3, day: 9, keyOffset: 2 },
-        { name: "Australian Grand Prix", location: "Melbourne", country: "Australia", month: 3, day: 24, keyOffset: 3 },
-        { name: "Japanese Grand Prix", location: "Suzuka", country: "Japan", month: 4, day: 7, keyOffset: 4 },
-        { name: "Chinese Grand Prix", location: "Shanghai", country: "China", month: 4, day: 21, keyOffset: 5 },
-        { name: "Miami Grand Prix", location: "Miami", country: "USA", month: 5, day: 5, keyOffset: 6 },
-        { name: "Emilia Romagna Grand Prix", location: "Imola", country: "Italy", month: 5, day: 19, keyOffset: 7 },
-        { name: "Monaco Grand Prix", location: "Monte Carlo", country: "Monaco", month: 5, day: 26, keyOffset: 8 },
-        { name: "Canadian Grand Prix", location: "Montreal", country: "Canada", month: 6, day: 9, keyOffset: 9 },
-        { name: "Spanish Grand Prix", location: "Barcelona", country: "Spain", month: 6, day: 23, keyOffset: 10 },
-        { name: "Austrian Grand Prix", location: "Spielberg", country: "Austria", month: 6, day: 30, keyOffset: 11 },
-        { name: "British Grand Prix", location: "Silverstone", country: "UK", month: 7, day: 7, keyOffset: 12 },
-        { name: "Hungarian Grand Prix", location: "Budapest", country: "Hungary", month: 7, day: 21, keyOffset: 13 },
-        { name: "Belgian Grand Prix", location: "Spa", country: "Belgium", month: 7, day: 28, keyOffset: 14 },
-        { name: "Dutch Grand Prix", location: "Zandvoort", country: "Netherlands", month: 8, day: 25, keyOffset: 15 },
-        { name: "Italian Grand Prix", location: "Monza", country: "Italy", month: 9, day: 1, keyOffset: 16 },
-        { name: "Azerbaijan Grand Prix", location: "Baku", country: "Azerbaijan", month: 9, day: 15, keyOffset: 17 },
-        { name: "Singapore Grand Prix", location: "Singapore", country: "Singapore", month: 9, day: 22, keyOffset: 18 },
-        { name: "United States Grand Prix", location: "Austin", country: "USA", month: 10, day: 20, keyOffset: 19 },
-        { name: "Mexico City Grand Prix", location: "Mexico City", country: "Mexico", month: 10, day: 27, keyOffset: 20 },
-        { name: "São Paulo Grand Prix", location: "São Paulo", country: "Brazil", month: 11, day: 3, keyOffset: 21 },
-        { name: "Las Vegas Grand Prix", location: "Las Vegas", country: "USA", month: 11, day: 23, keyOffset: 22 },
-        { name: "Qatar Grand Prix", location: "Lusail", country: "Qatar", month: 12, day: 1, keyOffset: 23 },
-        { name: "Abu Dhabi Grand Prix", location: "Yas Marina", country: "UAE", month: 12, day: 8, keyOffset: 24 },
-      ];
-
-      const mockSessionList = templates.map((t) => {
-        const monthStr = String(t.month).padStart(2, "0");
-        const dayStr = String(t.day).padStart(2, "0");
-        return {
-          session_key: selectedYear * 1000 + t.keyOffset,
-          session_name: "Race",
-          session_type: "Race",
-          meeting_key: selectedYear * 100 + t.keyOffset,
-          meeting_name: `${t.name} (${selectedYear})`,
-          location: t.location,
-          country_name: t.country,
-          year: selectedYear,
-          date_start: `${selectedYear}-${monthStr}-${dayStr}T14:00:00Z`
-        };
-      }).sort((a, b) => new Date(b.date_start).getTime() - new Date(a.date_start).getTime());
-
-      setSessionList(mockSessionList);
-      setIsDemoData(true);
-      if (mockSessionList.length > 0) {
-        setSelectedSessionKey(mockSessionList[0].session_key);
-      } else {
+      console.warn("Backend sessions API unavailable; trying OpenF1 directly.", err);
+      try {
+        const sessions = await fetchOpenF1SessionsDirect(selectedYear);
+        setSessionList(sessions);
+        if (sessions.length) writeApiCache(cacheKey, sessions);
+        setIsDemoData(false);
+        if (sessions.length > 0) {
+          setSelectedSessionKey(sessions[0].session_key);
+        } else {
+          setSelectedSessionKey("");
+          setSessionInfo(null);
+          setDrivers([]);
+          setSelectedDriver(null);
+          setDriverLaps([]);
+          setWeatherData([]);
+          setRaceEvents([]);
+        }
+      } catch (directErr) {
+        console.warn("OpenF1 direct sessions request failed; no generated data will be used.", directErr);
+        setSessionList([]);
         setSelectedSessionKey("");
+        setSessionInfo(null);
+        setDrivers([]);
+        setSelectedDriver(null);
+        setDriverLaps([]);
+        setWeatherData([]);
+        setRaceEvents([]);
+        setIsDemoData(false);
+        setErrorMessage("Не удалось загрузить сессии из OpenF1. Фейковые данные отключены.");
       }
     } finally {
       setSessionsLoading(false);
@@ -445,10 +655,19 @@ export default function App() {
     setBestLapTime(null);
     setAvgLapTime(null);
     setAiAnalysis("");
+    const cacheKey = `session-data:${key}`;
+    const cachedData = readApiCache<any>(cacheKey);
+    if (cachedData?.session) {
+      setSessionInfo(cachedData.session);
+      setDrivers(cachedData.drivers || []);
+      setWeatherData(cachedData.weather || []);
+      setRaceEvents(cachedData.events || []);
+      setIsDemoData(false);
+    }
     
     try {
       const res = await fetch(`/api/session-data?session_key=${key}`);
-      const payload = await res.json();
+      const payload = await readJsonOrThrow(res);
       
       if (payload.success && payload.data) {
         const d = payload.data;
@@ -456,6 +675,7 @@ export default function App() {
         setDrivers(d.drivers || []);
         setWeatherData(d.weather || []);
         setRaceEvents(d.events || []);
+        if (d.session) writeApiCache(cacheKey, d);
         setIsDemoData(payload.isDemo || false);
 
         // Auto select Charles or Lando or Verstappen or first driver
@@ -467,28 +687,28 @@ export default function App() {
         throw new Error("Session data API failure");
       }
     } catch (err) {
-      console.warn("API Offline or hosted statically - running safe local F1 telemetry loader...", err);
-      const isFallbackKey = key >= 2010000 && key <= 2027000;
-      let matchedSession = sessionList.find((s) => Number(s.session_key) === key);
-      
-      const keyOffset = key % 1000;
-      const baseKey = (keyOffset % 2 === 1) ? 9507 : 9541;
-      const mockKey = MOCK_SESSIONS[key] ? key : baseKey;
-      const d = MOCK_SESSIONS[mockKey];
-      
-      if (d) {
-        setSessionInfo(matchedSession || d.session);
+      console.warn("Backend session data API unavailable; trying OpenF1 directly.", err);
+      try {
+        const d = await fetchOpenF1SessionDataDirect(key);
+        setSessionInfo(d.session);
         setDrivers(d.drivers || []);
         setWeatherData(d.weather || []);
         setRaceEvents(d.events || []);
-        setIsDemoData(true);
+        if (d.session) writeApiCache(cacheKey, d);
+        setIsDemoData(false);
 
         if (d.drivers && d.drivers.length > 0) {
           const favorite = d.drivers.find((dr: Driver) => dr.name_acronym === "LEC" || dr.name_acronym === "VER" || dr.name_acronym === "NOR") || d.drivers[0];
           setSelectedDriver(favorite);
         }
-      } else {
-        setErrorMessage("Режим оффлайн: демо-данные не найдены.");
+      } catch (directErr) {
+        console.warn("OpenF1 direct session data request failed; no generated telemetry will be used.", directErr);
+        setSessionInfo(null);
+        setDrivers([]);
+        setWeatherData([]);
+        setRaceEvents([]);
+        setIsDemoData(false);
+        setErrorMessage("Не удалось загрузить данные сессии из OpenF1. Фейковая телеметрия отключена.");
       }
     } finally {
       setDataLoading(false);
@@ -506,12 +726,24 @@ export default function App() {
 
   const loadDriverLaps = async (sessKey: number, dNum: number) => {
     setLapsLoading(true);
+    const cacheKey = `laps:${sessKey}:${dNum}`;
+    const cachedLaps = readApiCache<Lap[]>(cacheKey);
+    if (cachedLaps) {
+      setDriverLaps(cachedLaps);
+      const realLaps = cachedLaps.filter((l: Lap) => l.lap_duration && l.lap_duration > 0);
+      if (realLaps.length > 0) {
+        const times = realLaps.map((l: Lap) => l.lap_duration as number);
+        setBestLapTime(Math.min(...times));
+        setAvgLapTime(times.reduce((a, b) => a + b, 0) / times.length);
+      }
+    }
     try {
       const res = await fetch(`/api/driver-laps?session_key=${sessKey}&driver_number=${dNum}`);
-      const payload = await res.json();
+      const payload = await readJsonOrThrow(res);
       if (payload.success) {
         const laps = payload.laps || [];
         setDriverLaps(laps);
+        writeApiCache(cacheKey, laps);
 
         // Stats calculus
         const realLaps = laps.filter((l: Lap) => l.lap_duration && l.lap_duration > 0);
@@ -527,40 +759,23 @@ export default function App() {
         throw new Error("Laps API returned failure");
       }
     } catch (err) {
-      console.warn("API Offline or hosted statically - loading driver laps from mock data...", err);
-      let fallbackLaps: any[] = [];
-      if (MOCK_SESSIONS[sessKey]?.laps?.[dNum]) {
-        fallbackLaps = MOCK_SESSIONS[sessKey].laps[dNum];
-      } else if (MOCK_SESSIONS[sessKey]?.laps) {
-        const firstDriverNum = Object.keys(MOCK_SESSIONS[sessKey].laps)[0];
-        const baseLaps = MOCK_SESSIONS[sessKey].laps[Number(firstDriverNum)] || [];
-        const scale = 1 + (((dNum * 17) % 31) - 15) / 500;
-        fallbackLaps = baseLaps.map(l => ({
-          ...l,
-          lap_duration: l.lap_duration ? Number((l.lap_duration * scale).toFixed(3)) : null,
-          duration_sector_1: l.duration_sector_1 ? Number((l.duration_sector_1 * scale).toFixed(3)) : null,
-          duration_sector_2: l.duration_sector_2 ? Number((l.duration_sector_2 * scale).toFixed(3)) : null,
-          duration_sector_3: l.duration_sector_3 ? Number((l.duration_sector_3 * scale).toFixed(3)) : null,
-        }));
-      } else {
-        const baseLaps = MOCK_SESSIONS[9507]?.laps?.[dNum] || MOCK_SESSIONS[9507]?.laps?.[16] || [];
-        const scale = 1 + (((dNum * 17) % 31) - 15) / 500;
-        fallbackLaps = baseLaps.map(l => ({
-          ...l,
-          lap_duration: l.lap_duration ? Number((l.lap_duration * scale).toFixed(3)) : null,
-          duration_sector_1: l.duration_sector_1 ? Number((l.duration_sector_1 * scale).toFixed(3)) : null,
-          duration_sector_2: l.duration_sector_2 ? Number((l.duration_sector_2 * scale).toFixed(3)) : null,
-          duration_sector_3: l.duration_sector_3 ? Number((l.duration_sector_3 * scale).toFixed(3)) : null,
-        }));
-      }
-      setDriverLaps(fallbackLaps);
-
-      const realLaps = fallbackLaps.filter((l: Lap) => l.lap_duration && l.lap_duration > 0);
-      if (realLaps.length > 0) {
-        const times = realLaps.map((l: Lap) => l.lap_duration as number);
-        setBestLapTime(Math.min(...times));
-        setAvgLapTime(times.reduce((a, b) => a + b, 0) / times.length);
-      } else {
+      console.warn("Backend driver laps API unavailable; trying OpenF1 directly.", err);
+      try {
+        const laps = await fetchOpenF1DriverLapsDirect(sessKey, dNum);
+        setDriverLaps(laps);
+        writeApiCache(cacheKey, laps);
+        const realLaps = laps.filter((l: Lap) => l.lap_duration && l.lap_duration > 0);
+        if (realLaps.length > 0) {
+          const times = realLaps.map((l: Lap) => l.lap_duration as number);
+          setBestLapTime(Math.min(...times));
+          setAvgLapTime(times.reduce((a, b) => a + b, 0) / times.length);
+        } else {
+          setBestLapTime(null);
+          setAvgLapTime(null);
+        }
+      } catch (directErr) {
+        console.warn("OpenF1 direct laps request failed; no generated laps will be used.", directErr);
+        setDriverLaps([]);
         setBestLapTime(null);
         setAvgLapTime(null);
       }
@@ -579,10 +794,17 @@ export default function App() {
   const loadJolpicaStandingsAndResults = async () => {
     setStandingsLoading(true);
     setCalendarLoading(true);
+    const cacheKey = `standings-results:${jolpicaYear}`;
+    const cachedStandings = readApiCache<any>(cacheKey);
+    if (cachedStandings) {
+      setStandingDrivers(cachedStandings.drivers || []);
+      setStandingConstructors(cachedStandings.constructors || []);
+      setSeasonRaces(cachedStandings.races || []);
+    }
     try {
       // Standing API Request
       const stdRes = await fetch(`/api/standings?year=${jolpicaYear}`);
-      const stdPayload = await stdRes.json();
+      const stdPayload = await readJsonOrThrow(stdRes);
       if (stdPayload.success) {
         setStandingDrivers(stdPayload.drivers || []);
         setStandingConstructors(stdPayload.constructors || []);
@@ -592,184 +814,30 @@ export default function App() {
 
       // Races Results API Request
       const calRes = await fetch(`/api/results?year=${jolpicaYear}`);
-      const calPayload = await calRes.json();
+      const calPayload = await readJsonOrThrow(calRes);
       if (calPayload.success) {
         setSeasonRaces(calPayload.races || []);
+        writeApiCache(cacheKey, { drivers: stdPayload.drivers || [], constructors: stdPayload.constructors || [], races: calPayload.races || [] });
       } else {
         throw new Error("Results API returned failure");
       }
     } catch (err) {
-      console.warn("API Offline or hosted statically - loading standings from fallback...", err);
-      
-      let fallbackDrivers = [];
-      let fallbackConstructors = [];
-
-      if (jolpicaYear === 2026) {
-        fallbackDrivers = [
-          { position: 1, points: 412, wins: 10, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
-          { position: 2, points: 388, wins: 5, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Ferrari" },
-          { position: 3, points: 374, wins: 4, driverName: "Lando Norris", driverAcronym: "NOR", nationality: "British", teamName: "McLaren" },
-          { position: 4, points: 345, wins: 2, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
-          { position: 5, points: 290, wins: 2, driverName: "Oscar Piastri", driverAcronym: "PIA", nationality: "Australian", teamName: "McLaren" },
-          { position: 6, points: 242, wins: 1, driverName: "George Russell", driverAcronym: "RUS", nationality: "British", teamName: "Mercedes" },
-        ];
-        fallbackConstructors = [
-          { position: 1, points: 733, wins: 7, teamName: "Ferrari", nationality: "Italian" },
-          { position: 2, points: 664, wins: 6, teamName: "McLaren", nationality: "British" },
-          { position: 3, points: 557, wins: 10, teamName: "Red Bull Racing", nationality: "Austrian" },
-          { position: 4, points: 310, wins: 1, teamName: "Mercedes", nationality: "British" },
-        ];
-      } else if (jolpicaYear === 2025) {
-        fallbackDrivers = [
-          { position: 1, points: 437, wins: 9, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
-          { position: 2, points: 384, wins: 3, driverName: "Lando Norris", driverAcronym: "NOR", nationality: "British", teamName: "McLaren" },
-          { position: 3, points: 325, wins: 2, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
-          { position: 4, points: 244, wins: 2, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
-          { position: 5, points: 228, wins: 1, driverName: "Oscar Piastri", driverAcronym: "PIA", nationality: "Australian", teamName: "McLaren" },
-          { position: 6, points: 190, wins: 1, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "Ferrari" },
-        ];
-        fallbackConstructors = [
-          { position: 1, points: 641, wins: 8, teamName: "McLaren", nationality: "British" },
-          { position: 2, points: 585, wins: 3, teamName: "Ferrari", nationality: "Italian" },
-          { position: 3, points: 544, wins: 9, teamName: "Red Bull Racing", nationality: "Austrian" },
-          { position: 4, points: 382, wins: 2, teamName: "Mercedes", nationality: "British" },
-        ];
-      } else if (jolpicaYear === 2024) {
-        fallbackDrivers = [
-          { position: 1, points: 575, wins: 15, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
-          { position: 2, points: 384, wins: 3, driverName: "Lando Norris", driverAcronym: "NOR", nationality: "British", teamName: "McLaren" },
-          { position: 3, points: 356, wins: 3, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
-          { position: 4, points: 262, wins: 2, driverName: "Oscar Piastri", driverAcronym: "PIA", nationality: "Australian", teamName: "McLaren" },
-          { position: 5, points: 258, wins: 2, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "Ferrari" },
-          { position: 6, points: 245, wins: 2, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
-        ];
-        fallbackConstructors = [
-          { position: 1, points: 651, wins: 5, teamName: "McLaren", nationality: "British" },
-          { position: 2, points: 614, wins: 5, teamName: "Ferrari", nationality: "Italian" },
-          { position: 3, points: 589, wins: 15, teamName: "Red Bull Racing", nationality: "Austrian" },
-          { position: 4, points: 473, wins: 3, teamName: "Mercedes", nationality: "British" },
-        ];
-      } else if (jolpicaYear === 2023) {
-        fallbackDrivers = [
-          { position: 1, points: 575, wins: 19, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
-          { position: 2, points: 285, wins: 2, driverName: "Sergio Perez", driverAcronym: "PER", nationality: "Mexican", teamName: "Red Bull Racing" },
-          { position: 3, points: 234, wins: 0, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
-          { position: 4, points: 206, wins: 0, driverName: "Fernando Alonso", driverAcronym: "ALO", nationality: "Spanish", teamName: "Aston Martin" },
-          { position: 5, points: 206, wins: 1, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
-          { position: 6, points: 200, wins: 1, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "Ferrari" },
-        ];
-        fallbackConstructors = [
-          { position: 1, points: 860, wins: 21, teamName: "Red Bull Racing", nationality: "Austrian" },
-          { position: 2, points: 409, wins: 0, teamName: "Mercedes", nationality: "British" },
-          { position: 3, points: 406, wins: 1, teamName: "Ferrari", nationality: "Italian" },
-          { position: 4, points: 302, wins: 0, teamName: "McLaren", nationality: "British" },
-        ];
-      } else if (jolpicaYear === 2022) {
-        fallbackDrivers = [
-          { position: 1, points: 454, wins: 15, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
-          { position: 2, points: 308, wins: 3, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
-          { position: 3, points: 305, wins: 2, driverName: "Sergio Perez", driverAcronym: "PER", nationality: "Mexican", teamName: "Red Bull Racing" },
-          { position: 4, points: 275, wins: 1, driverName: "George Russell", driverAcronym: "RUS", nationality: "British", teamName: "Mercedes" },
-          { position: 5, points: 246, wins: 1, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "Ferrari" },
-          { position: 6, points: 240, wins: 0, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
-        ];
-        fallbackConstructors = [
-          { position: 1, points: 759, wins: 17, teamName: "Red Bull Racing", nationality: "Austrian" },
-          { position: 2, points: 554, wins: 4, teamName: "Ferrari", nationality: "Italian" },
-          { position: 3, points: 515, wins: 1, teamName: "Mercedes", nationality: "British" },
-          { position: 4, points: 159, wins: 0, teamName: "McLaren", nationality: "British" },
-        ];
-      } else if (jolpicaYear === 2021) {
-        fallbackDrivers = [
-          { position: 1, points: 395, wins: 10, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
-          { position: 2, points: 387, wins: 8, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
-          { position: 3, points: 226, wins: 1, driverName: "Valtteri Bottas", driverAcronym: "BOT", nationality: "Finnish", teamName: "Mercedes" },
-          { position: 4, points: 190, wins: 1, driverName: "Sergio Perez", driverAcronym: "PER", nationality: "Mexican", teamName: "Red Bull Racing" },
-          { position: 5, points: 164, wins: 0, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "Ferrari" },
-          { position: 6, points: 160, wins: 0, driverName: "Lando Norris", driverAcronym: "NOR", nationality: "British", teamName: "McLaren" },
-        ];
-        fallbackConstructors = [
-          { position: 1, points: 613, wins: 9, teamName: "Mercedes", nationality: "British" },
-          { position: 2, points: 585, wins: 11, teamName: "Red Bull Racing", nationality: "Austrian" },
-          { position: 3, points: 323, wins: 0, teamName: "Ferrari", nationality: "Italian" },
-          { position: 4, points: 275, wins: 1, teamName: "McLaren", nationality: "British" },
-        ];
-      } else if (jolpicaYear === 2020) {
-        fallbackDrivers = [
-          { position: 1, points: 347, wins: 11, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
-          { position: 2, points: 223, wins: 2, driverName: "Valtteri Bottas", driverAcronym: "BOT", nationality: "Finnish", teamName: "Mercedes" },
-          { position: 3, points: 214, wins: 2, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
-          { position: 4, points: 125, wins: 1, driverName: "Sergio Perez", driverAcronym: "PER", nationality: "Mexican", teamName: "Racing Point" },
-          { position: 5, points: 119, wins: 0, driverName: "Daniel Ricciardo", driverAcronym: "RIC", nationality: "Australian", teamName: "Renault" },
-          { position: 6, points: 105, wins: 0, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "McLaren" },
-        ];
-        fallbackConstructors = [
-          { position: 1, points: 573, wins: 13, teamName: "Mercedes", nationality: "British" },
-          { position: 2, points: 319, wins: 2, teamName: "Red Bull Racing", nationality: "Austrian" },
-          { position: 3, points: 202, wins: 0, teamName: "McLaren", nationality: "British" },
-          { position: 4, points: 195, wins: 1, teamName: "Racing Point", nationality: "British" },
-        ];
-      } else if (jolpicaYear === 2019) {
-        fallbackDrivers = [
-          { position: 1, points: 413, wins: 11, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
-          { position: 2, points: 326, wins: 4, driverName: "Valtteri Bottas", driverAcronym: "BOT", nationality: "Finnish", teamName: "Mercedes" },
-          { position: 3, points: 278, wins: 3, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
-          { position: 4, points: 264, wins: 2, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
-          { position: 5, points: 240, wins: 1, driverName: "Sebastian Vettel", driverAcronym: "VET", nationality: "German", teamName: "Ferrari" },
-          { position: 6, points: 96, wins: 0, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "McLaren" },
-        ];
-        fallbackConstructors = [
-          { position: 1, points: 739, wins: 15, teamName: "Mercedes", nationality: "British" },
-          { position: 2, points: 504, wins: 3, teamName: "Ferrari", nationality: "Italian" },
-          { position: 3, points: 417, wins: 3, teamName: "Red Bull Racing", nationality: "Austrian" },
-          { position: 4, points: 145, wins: 0, teamName: "McLaren", nationality: "British" },
-        ];
-      } else {
-        // 2018
-        fallbackDrivers = [
-          { position: 1, points: 408, wins: 11, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
-          { position: 2, points: 320, wins: 5, driverName: "Sebastian Vettel", driverAcronym: "VET", nationality: "German", teamName: "Ferrari" },
-          { position: 3, points: 251, wins: 1, driverName: "Kimi Räikkönen", driverAcronym: "RAI", nationality: "Finnish", teamName: "Ferrari" },
-          { position: 4, points: 249, wins: 2, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
-          { position: 5, points: 247, wins: 0, driverName: "Valtteri Bottas", driverAcronym: "BOT", nationality: "Finnish", teamName: "Mercedes" },
-          { position: 6, points: 170, wins: 2, driverName: "Daniel Ricciardo", driverAcronym: "RIC", nationality: "Australian", teamName: "Red Bull Racing" },
-        ];
-        fallbackConstructors = [
-          { position: 1, points: 655, wins: 11, teamName: "Mercedes", nationality: "British" },
-          { position: 2, points: 571, wins: 6, teamName: "Ferrari", nationality: "Italian" },
-          { position: 3, points: 419, wins: 4, teamName: "Red Bull Racing", nationality: "Austrian" },
-          { position: 4, points: 93, wins: 0, teamName: "Renault", nationality: "French" },
-        ];
+      console.warn("Backend standings/results API unavailable; trying Jolpica directly.", err);
+      try {
+        const [standings, races] = await Promise.all([
+          fetchJolpicaStandingsDirect(jolpicaYear),
+          fetchJolpicaRaceResultsDirect(jolpicaYear),
+        ]);
+        setStandingDrivers(standings.drivers || []);
+        setStandingConstructors(standings.constructors || []);
+        setSeasonRaces(races || []);
+        writeApiCache(cacheKey, { drivers: standings.drivers || [], constructors: standings.constructors || [], races: races || [] });
+      } catch (directErr) {
+        console.warn("Jolpica direct request failed; no generated standings/results will be used.", directErr);
+        setStandingDrivers([]);
+        setStandingConstructors([]);
+        setSeasonRaces([]);
       }
-      const fallbackRaces = [
-        { round: 1, raceName: "Bahrain Grand Prix", circuitName: "Bahrain International Circuit", locality: "Sakhir", country: "Bahrain", date: `${jolpicaYear}-03-02`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:31:44.742" },
-        { round: 2, raceName: "Saudi Arabian Grand Prix", circuitName: "Jeddah Street Circuit", locality: "Jeddah", country: "Saudi Arabia", date: `${jolpicaYear}-03-09`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:20:43.119" },
-        { round: 3, raceName: "Australian Grand Prix", circuitName: "Albert Park Circuit", locality: "Melbourne", country: "Australia", date: `${jolpicaYear}-03-24`, winner: "Carlos Sainz", winnerAcronym: "SAI", winnerTeam: "Ferrari", time: "1:20:26.843" },
-        { round: 4, raceName: "Japanese Grand Prix", circuitName: "Suzuka International Racing Course", locality: "Suzuka", country: "Japan", date: `${jolpicaYear}-04-07`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:54:23.566" },
-        { round: 5, raceName: "Chinese Grand Prix", circuitName: "Shanghai International Circuit", locality: "Shanghai", country: "China", date: `${jolpicaYear}-04-21`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:40:52.554" },
-        { round: 6, raceName: "Miami Grand Prix", circuitName: "Miami International Autodrome", locality: "Miami", country: "USA", date: `${jolpicaYear}-05-05`, winner: "Lando Norris", winnerAcronym: "NOR", winnerTeam: "McLaren", time: "1:30:49.876" },
-        { round: 7, raceName: "Emilia Romagna Grand Prix", circuitName: "Autodromo Enzo e Dino Ferrari", locality: "Imola", country: "Italy", date: `${jolpicaYear}-05-19`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:25:25.252" },
-        { round: 8, raceName: "Monaco Grand Prix", circuitName: "Circuit de Monaco", locality: "Monte Carlo", country: "Monaco", date: `${jolpicaYear}-05-26`, winner: "Charles Leclerc", winnerAcronym: "LEC", winnerTeam: "Ferrari", time: "1:41:22.001" },
-        { round: 9, raceName: "Canadian Grand Prix", circuitName: "Circuit Gilles Villeneuve", locality: "Montreal", country: "Canada", date: `${jolpicaYear}-06-09`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:28:30.410" },
-        { round: 10, raceName: "Spanish Grand Prix", circuitName: "Circuit de Barcelona-Catalunya", locality: "Barcelona", country: "Spain", date: `${jolpicaYear}-06-23`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:29:05.112" },
-        { round: 11, raceName: "Austrian Grand Prix", circuitName: "Red Bull Ring", locality: "Spielberg", country: "Austria", date: `${jolpicaYear}-06-30`, winner: "George Russell", winnerAcronym: "RUS", winnerTeam: "Mercedes", time: "1:24:22.410" },
-        { round: 12, raceName: "British Grand Prix", circuitName: "Silverstone Circuit", locality: "Silverstone", country: "UK", date: `${jolpicaYear}-07-07`, winner: "Lewis Hamilton", winnerAcronym: "HAM", winnerTeam: "Mercedes", time: "1:29:12.441" },
-        { round: 13, raceName: "Hungarian Grand Prix", circuitName: "Hungaroring", locality: "Budapest", country: "Hungary", date: `${jolpicaYear}-07-21`, winner: "Oscar Piastri", winnerAcronym: "PIA", winnerTeam: "McLaren", time: "1:38:01.992" },
-        { round: 14, raceName: "Belgian Grand Prix", circuitName: "Circuit de Spa-Francorchamps", locality: "Spa", country: "Belgium", date: `${jolpicaYear}-07-28`, winner: "Lewis Hamilton", winnerAcronym: "HAM", winnerTeam: "Mercedes", time: "1:19:57.510" },
-        { round: 15, raceName: "Dutch Grand Prix", circuitName: "Circuit Zandvoort", locality: "Zandvoort", country: "Netherlands", date: `${jolpicaYear}-08-25`, winner: "Lando Norris", winnerAcronym: "NOR", winnerTeam: "McLaren", time: "1:30:45.519" },
-        { round: 16, raceName: "Italian Grand Prix", circuitName: "Autodromo Nazionale Monza", locality: "Monza", country: "Italy", date: `${jolpicaYear}-08-31`, winner: "Charles Leclerc", winnerAcronym: "LEC", winnerTeam: "Ferrari", time: "1:14:40.727" },
-        { round: 17, raceName: "Azerbaijan Grand Prix", circuitName: "Baku City Circuit", locality: "Baku", country: "Azerbaijan", date: `${jolpicaYear}-09-15`, winner: "Oscar Piastri", winnerAcronym: "PIA", winnerTeam: "McLaren", time: "1:32:58.007" },
-        { round: 18, raceName: "Singapore Grand Prix", circuitName: "Marina Bay Street Circuit", locality: "Singapore", country: "Singapore", date: `${jolpicaYear}-09-22`, winner: "Lando Norris", winnerAcronym: "NOR", winnerTeam: "McLaren", time: "1:40:50.571" },
-        { round: 19, raceName: "United States Grand Prix", circuitName: "Circuit of the Americas", locality: "Austin", country: "USA", date: `${jolpicaYear}-10-20`, winner: "Charles Leclerc", winnerAcronym: "LEC", winnerTeam: "Ferrari", time: "1:35:09.631" },
-        { round: 20, raceName: "Mexico City Grand Prix", circuitName: "Autódromo Hermanos Rodríguez", locality: "Mexico City", country: "Mexico", date: `${jolpicaYear}-10-27`, winner: "Carlos Sainz", winnerAcronym: "SAI", winnerTeam: "Ferrari", time: "1:40:55.807" },
-        { round: 21, raceName: "São Paulo Grand Prix", circuitName: "Autódromo José Carlos Pace", locality: "São Paulo", country: "Brazil", date: `${jolpicaYear}-11-03`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "2:06:54.430" },
-        { round: 22, raceName: "Las Vegas Grand Prix", circuitName: "Las Vegas Strip Circuit", locality: "Las Vegas", country: "USA", date: `${jolpicaYear}-11-23`, winner: "George Russell", winnerAcronym: "RUS", winnerTeam: "Mercedes", time: "1:22:05.992" },
-        { round: 23, raceName: "Qatar Grand Prix", circuitName: "Lusail International Circuit", locality: "Lusail", country: "Qatar", date: `${jolpicaYear}-12-01`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:31:05.323" },
-        { round: 24, raceName: "Abu Dhabi Grand Prix", circuitName: "Yas Marina Circuit", locality: "Yas Marina", country: "UAE", date: `${jolpicaYear}-12-08`, winner: "Lewis Hamilton", winnerAcronym: "HAM", winnerTeam: "Mercedes", time: "1:39:45.302" }
-      ];
-      setStandingDrivers(fallbackDrivers);
-      setStandingConstructors(fallbackConstructors);
-      setSeasonRaces(fallbackRaces);
     } finally {
       setStandingsLoading(false);
       setCalendarLoading(false);
@@ -777,7 +845,7 @@ export default function App() {
   };
 
   // ========================================================
-  // 5. FastF1 Simulated Telemetry generator trigger
+  // 5. FastF1 overlay rendering trigger
   // ========================================================
   useEffect(() => {
     setIsFastF1Generating(true);
@@ -807,6 +875,7 @@ export default function App() {
           laps: driverLaps,
           weather: weatherData,
           events: raceEvents,
+          question: "Сделай короткий комментарий по текущей сессии",
         }),
       });
 
@@ -830,25 +899,46 @@ export default function App() {
         return mins > 0 ? `${mins}:${remainingSecs.padStart(6, "0")}` : `${remainingSecs}с`;
       };
 
-      setAiAnalysis(`### 🏁 F1 AI Анализ (Локальный режим)
+      setAiAnalysis(`### Комментарий по данным API
 
-Интегрированный локальный ИИ-анализатор изучил данные телеметрии и погодные сводки текущей сессии.
+Этап: **${sessionInfo.meeting_name}**. Пилот **${selectedDriver.full_name}** (${selectedDriver.team_name}).
 
-1. **Общий обзор сессии**
-   Заезды проходят на легендарной трассе **${sessionInfo.location}** (${sessionInfo.country_name}) в рамках этапа **${sessionInfo.meeting_name} ${sessionInfo.year}**. Динамические погодные условия требуют от инженеров ювелирного контроля температуры прогревочных чехлов и давления в шинах для максимального механического зацепа.
+Кругов с временем: **${validL.length}**. Лучший круг: **${formatTimeLocal(bL)}**. Средний темп: **${formatTimeLocal(aL)}**.
 
-2. **⏱ Анализ темпа пилотирования ${selectedDriver.name_acronym}**
-   Пилот **${selectedDriver.full_name}** из команды **${selectedDriver.team_name}** демонстрирует стабильный гоночный темп.
-   - Всего кругов в этой сессии: **${driverLaps.length}**
-   - Лучший круг пилота: **${formatTimeLocal(bL)}**
-   - Средний темп на длинной серии: **${formatTimeLocal(aL)}**
-   На машине под номером **#${selectedDriver.driver_number}** инженеры применили оптимальные аэродинамические настройки, чтобы минимизировать сопротивление воздуха на длинных прямых и сохранить прижимную силу в скоростных апексах.
+${weatherData.length ? `Погода OpenF1: трасса **${weatherData[weatherData.length - 1].track_temperature}°C**, воздух **${weatherData[weatherData.length - 1].air_temperature}°C**.` : "Погодные данные OpenF1 не загружены."}
 
-3. **🚧 Влияние гоночных инцидентов**
-   Анализ сообщений Race Control показывает стабильную работу пилота во время желтых флагов и фаз автомобилей безопасности. Гонщик мастерски использует точки активации DRS и грамотно реализует тактическую схему *undercut*, избегая чрезмерной тепловой деградации резины.
+ИИ-сервис сейчас недоступен, поэтому показан только фактологический разбор без выдуманных прогнозов.`)
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
-4. **💡 Резюме для зрителя**
-   Высокая стабильность секторов у **${selectedDriver.name_acronym}** говорит об отличной сбалансированности шасси ${selectedDriver.team_name}. Текущий гоночный темп пилота делает его одним из фаворитов в борьбе за подиум на этой трассе.`);
+  const sendAiChatMessage = async () => {
+    const question = aiChatInput.trim();
+    if (!question || !sessionInfo || !selectedDriver) return;
+
+    setAiChatMessages((items) => [...items, { role: "user", text: question }]);
+    setAiChatInput("");
+    setAiLoading(true);
+
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session: sessionInfo,
+          driver: selectedDriver,
+          laps: driverLaps,
+          weather: weatherData,
+          events: raceEvents,
+          question,
+        }),
+      });
+      const payload = await readJsonOrThrow(res);
+      setAiChatMessages((items) => [...items, { role: "assistant", text: payload.analysis || "Нет ответа от ИИ." }]);
+    } catch (err) {
+      console.warn("AI chat failed.", err);
+      setAiChatMessages((items) => [...items, { role: "assistant", text: "ИИ-чат сейчас недоступен. Данные OpenF1/Jolpica остаются на экране без подмены." }]);
     } finally {
       setAiLoading(false);
     }
@@ -981,7 +1071,7 @@ export default function App() {
                 </span>
               </div>
               <p className="text-[11px] text-gray-400 font-medium">
-                OpenF1 • Jolpica F1 • FastF1 Overlay • F1DB Historical Engine (1950-2026)
+                OpenF1 telemetry • AI race commentator
               </p>
             </div>
           </div>
@@ -990,10 +1080,7 @@ export default function App() {
           <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
             <nav className="flex bg-[#161824] p-1.5 rounded-xl border border-[#2d3142] w-full sm:w-auto max-w-2xl overflow-x-auto scrollbar-none">
               {[
-                { id: "telemetry", label: "Телеметрия Hub", icon: Activity, desc: "OpenF1 Live" },
-                { id: "standings", label: "Таблицы & Результаты", icon: Award, desc: "Jolpica API" },
-                { id: "fastf1", label: "FastF1 Оверлей", icon: Sliders, desc: "Lap Analysis" },
-                { id: "f1db", label: "F1DB Архив 1950", icon: Trophy, desc: "Historical Stat" }
+                { id: "telemetry", label: "Телеметрия Hub", icon: Activity, desc: "OpenF1 Live" }
               ].map((tab) => {
                 const IsSelected = activeTab === tab.id;
                 const Icon = tab.icon;
@@ -1137,10 +1224,15 @@ export default function App() {
                     <span className="text-xs font-black text-white mt-1 block uppercase">
                       {sessionInfo ? `${sessionInfo.meeting_name} • ${sessionInfo.location}` : "Сессия не загружается"}
                     </span>
+                    {sessionInfo?.winner && (
+                      <span className="text-[10px] text-amber-300 font-mono mt-1 block uppercase">
+                        🥇 Победитель: {sessionInfo.winner} {sessionInfo.winnerTeam ? `(${sessionInfo.winnerTeam})` : ""}
+                      </span>
+                    )}
                   </div>
                   <div className="text-right">
                     <span className="text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono px-2 py-1 rounded font-bold uppercase tracking-wider block">
-                      {isDemoData ? "РЕЗЕРВНЫЙ ПРЕСЕТ" : "ПОТОК ПРЯМОЙ"}
+                      {isDemoData ? "ВНЕШНИЙ API НЕДОСТУПЕН" : "ПОТОК API"}
                     </span>
                   </div>
                 </div>
@@ -1185,11 +1277,11 @@ export default function App() {
                 <span className="text-xl sm:text-2xl font-bold font-mono tracking-tight text-white block">
                   {weatherData.length > 0 
                     ? `${weatherData[weatherData.length - 1].track_temperature.toFixed(1)}°C` 
-                    : "35.2°C"
+                    : "Нет данных"
                   }
                 </span>
                 <span className="text-[10px] text-gray-400 font-mono mt-2 block uppercase font-medium">
-                  Воздух: {weatherData.length > 0 ? `${weatherData[weatherData.length - 1].air_temperature.toFixed(1)}°C` : "21.6°C"}
+                  Воздух: {weatherData.length > 0 ? `${weatherData[weatherData.length - 1].air_temperature.toFixed(1)}°C` : "нет данных OpenF1"}
                 </span>
               </div>
 
@@ -1201,11 +1293,11 @@ export default function App() {
                 <span className="text-xl sm:text-2xl font-bold font-mono tracking-tight text-white block">
                   {weatherData.length > 0 
                     ? (weatherData[weatherData.length - 1].rainfall > 0 ? "🌧️ Дождь" : "☀️ Сухо") 
-                    : "☀️ Сухо"
+                    : "Нет данных"
                   }
                 </span>
                 <span className="text-[10px] text-gray-400 font-mono mt-2 block uppercase font-medium">
-                  Влажность: {weatherData.length > 0 ? `${weatherData[weatherData.length - 1].humidity}%` : "54%"}
+                  Влажность: {weatherData.length > 0 ? `${weatherData[weatherData.length - 1].humidity}%` : "нет данных OpenF1"}
                 </span>
               </div>
 
@@ -1295,6 +1387,7 @@ export default function App() {
                         <div>
                           <div className="text-xs font-black uppercase text-white truncate max-w-[110px]">{d.broadcast_name}</div>
                           <div className="text-[9px] text-gray-400 font-medium truncate max-w-[110px]">{d.team_name}</div>
+                          <div className="text-[8px] text-amber-300 font-mono uppercase">{d.finishing_position ? `Финиш P${d.finishing_position}` : "результат OpenF1"}</div>
                         </div>
                       </button>
                     );
@@ -1417,7 +1510,7 @@ export default function App() {
                       <Sparkles className="w-4.5 h-4.5 text-[#e10600] animate-pulse" />
                       <div>
                         <h3 className="text-xs font-black uppercase text-white tracking-widest flex items-center gap-1">ИИ-Резидент: Формульный Аналитик</h3>
-                        <p className="text-[9px] text-[#e10600] font-mono font-bold uppercase">Провайдер: Google Gemini 3.5-Flash</p>
+                        <p className="text-[9px] text-[#e10600] font-mono font-bold uppercase">Провайдер: GigaChat / Gemini / API fallback</p>
                       </div>
                     </div>
                     <button
@@ -1472,9 +1565,36 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="mt-4 p-2.5 bg-[#090a0f] rounded-lg text-[9px] text-gray-500 flex items-center justify-between font-mono border border-[#1b1c2b]">
-                  <span>Сводка: телеметрия + износ + погода</span>
-                  <span>КОНФИГУРАЦИЯ: AIR-PACE-PRO</span>
+                <div className="mt-4 border border-[#1b1c2b] bg-[#090a0f] rounded-xl p-3 space-y-3">
+                  <div className="text-[10px] font-black uppercase tracking-widest text-white flex items-center gap-2">
+                    <Sparkles className="w-3.5 h-3.5 text-[#e10600]" /> Чат с AI-комментатором
+                  </div>
+                  <div className="max-h-36 overflow-y-auto space-y-2 pr-1">
+                    {aiChatMessages.length === 0 ? (
+                      <p className="text-[10px] text-gray-500 font-mono">Задайте вопрос по загруженной сессии: темп, погода, круги, события Race Control. Ответ строится только по данным API.</p>
+                    ) : aiChatMessages.map((message, idx) => (
+                      <div key={idx} className={`text-[10px] font-mono p-2 rounded-lg border ${message.role === "user" ? "bg-[#1b1d2a] border-[#30344b] text-white" : "bg-black/20 border-[#24283b] text-gray-300"}`}>
+                        <span className="block text-[8px] uppercase text-[#e10600] mb-1">{message.role === "user" ? "Вы" : "AI-комментатор"}</span>
+                        {message.text.replace(/[#*]/g, "")}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      value={aiChatInput}
+                      onChange={(event) => setAiChatInput(event.target.value)}
+                      onKeyDown={(event) => { if (event.key === "Enter") sendAiChatMessage(); }}
+                      placeholder="Например: почему темп падает?"
+                      className="flex-1 bg-[#141520] border border-[#2a2d41] rounded-lg px-3 py-2 text-[11px] text-white outline-none focus:border-[#e10600]"
+                    />
+                    <button
+                      onClick={sendAiChatMessage}
+                      disabled={aiLoading || !selectedDriver || !aiChatInput.trim()}
+                      className="bg-[#e10600] disabled:opacity-40 text-white font-black uppercase text-[9px] px-3 rounded-lg"
+                    >
+                      Спросить
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -1537,7 +1657,7 @@ export default function App() {
                   <Calendar className="w-4 h-4" /> Сезон для загрузки зачетов
                 </label>
                 <div className="flex bg-[#090a0f] p-1 rounded-xl border border-[#2a2d41] overflow-x-auto scrollbar-thin">
-                  {[2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011, 2010].map((yr) => (
+                  {[2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011, 2010].map((yr) => (
                     <button
                       key={yr}
                       onClick={() => setJolpicaYear(yr)}
@@ -1718,13 +1838,13 @@ export default function App() {
               </div>
               <div className="relative z-10 max-w-4xl space-y-2">
                 <span className="text-[10px] uppercase font-mono tracking-widest text-[#e10600] bg-[#e10600]/10 px-3 py-1 rounded border border-[#e10600]/20 font-black">
-                  FastF1 Telemetry Overlap Simulator
+                  FastF1 telemetry overlay
                 </span>
                 <h2 className="text-xl sm:text-2xl font-black italic tracking-tight text-white uppercase mt-2">
                   Углублённый сравнительный анализ телеметрии двух машин
                 </h2>
                 <p className="text-xs text-gray-400 leading-relaxed font-mono">
-                  Библиотека FastF1 на языке Python является стандартом для разбора перегрузок, графиков дросселя, торможения и усечения траекторий в апексах. Ниже реализован симулятор телеметрии одного полного круга. Выберите двух конкурентов и телеметрический параметр.
+                  Библиотека FastF1 на языке Python является стандартом для разбора перегрузок, графиков дросселя, торможения и усечения траекторий в апексах. Раздел отключён от сгенерированных значений: для реальной телеметрии используйте вкладку OpenF1 и сравнение пилотов, где круги загружаются через API.
                 </p>
               </div>
             </div>
@@ -1791,21 +1911,21 @@ export default function App() {
 
               {/* Year for Simulation */}
               <div className="space-y-1.5 text-xs">
-                <label className="text-gray-400 font-bold block uppercase font-mono">📅 Сезон симуляции FastF1</label>
+                <label className="text-gray-400 font-bold block uppercase font-mono">📅 Сезон FastF1</label>
                 <select
                   value={fastFFYear}
                   onChange={(e) => setFastFFYear(Number(e.target.value))}
                   className="w-full bg-[#090a0f] border border-[#2d3142] p-2 rounded-lg text-white font-black"
                 >
-                  <option value="2026">2026 (Реконструкция шасси)</option>
-                  <option value="2025">2025 (Активные настройки)</option>
-                  <option value="2024">2024 (Аэродинамический профиль)</option>
+                  <option value="2026">2026</option>
+                  <option value="2025">2025</option>
+                  <option value="2024">2024</option>
                 </select>
               </div>
 
             </div>
 
-            {/* FASTF1 SIMULATED VISUAL LAP AREA */}
+            {/* FASTF1 VISUAL LAP AREA */}
             <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-stretch">
               
               {/* PRIMARY GRAPH AREA */}
@@ -1871,7 +1991,7 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Simulated telemetry parameters info */}
+                {/* Telemetry parameters info */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5 mt-4 pt-4 border-t border-[#212333] text-[10px] font-mono">
                   <div className="bg-[#090a0f] p-3 rounded-lg border border-[#212333]">
                     <span className="text-gray-500 block uppercase font-bold">Параметр</span>
@@ -2085,14 +2205,10 @@ export default function App() {
       <footer className="bg-black py-6 px-6 border-t border-[#181a24] text-xs">
         <div className="max-w-[1720px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-gray-500 font-mono select-none">
           <div className="text-[10px] font-black tracking-widest uppercase italic">
-            F1 METADATA CENTER PRO • ESTABLISHED 1950 - 2026
+            F1 API DATA CENTER • OPENF1 TELEMETRY
           </div>
           <div className="flex items-center gap-5">
             <a href="https://openf1.org" target="_blank" rel="noreferrer" className="hover:text-[#e10600] transition">OpenF1 API</a>
-            <span>|</span>
-            <a href="https://jolpica.org" target="_blank" rel="noreferrer" className="hover:text-[#e10600] transition">Jolpica F1 SDK</a>
-            <span>|</span>
-            <a href="#" className="hover:text-[#e10600] transition">FastF1 Visualizer</a>
           </div>
           <div className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-[#e10600] block animate-pulse"></span>
