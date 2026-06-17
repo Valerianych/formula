@@ -35,7 +35,7 @@
       return response;
     } catch (error) {
       const message = error?.message || "API request failed";
-      showApiError(url, message, "Внешний API не ответил. Заглушки отключены, поэтому данные не подменяются.");
+      showApiError(url, message, "Данные не загрузились из внешнего источника.");
 
       return new Response(JSON.stringify(emptyPayload(url, message)), {
         status: 200,
@@ -50,7 +50,7 @@
       isDemo: false,
       source: "API error",
       error: message,
-      note: "Заглушки отключены. Данные не подменялись.",
+      note: "Данные не загрузились из внешнего API.",
     };
 
     if (url.startsWith("/api/sessions")) {
@@ -108,10 +108,10 @@
     const items = Array.from(errorLog.entries()).slice(-4);
     panel.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;">
-        <div style="font-size:12px;font-weight:1000;text-transform:uppercase;letter-spacing:.08em;color:#ffb4b4;">Ошибка API</div>
+        <div style="font-size:12px;font-weight:1000;text-transform:uppercase;letter-spacing:.08em;color:#ffb4b4;">Не удалось загрузить данные</div>
         <button id="f1-api-error-close" style="border:0;background:rgba(255,255,255,.12);color:#fff;border-radius:999px;width:24px;height:24px;cursor:pointer;font-weight:900;">×</button>
       </div>
-      <div style="font-size:12px;line-height:1.45;color:#ffd6d6;margin-bottom:8px;">Заглушки отключены. Сайт показывает ошибку, а не выдуманные данные.</div>
+      <div style="font-size:12px;line-height:1.45;color:#ffd6d6;margin-bottom:8px;">Один из источников Формулы‑1 временно не ответил. Ниже указан проблемный запрос.</div>
       ${items.map(([url, item]) => `
         <div style="border-top:1px solid rgba(255,255,255,.12);padding-top:8px;margin-top:8px;">
           <div style="font-size:11px;font-weight:900;color:#fff;">${escapeHtml(url)}</div>
