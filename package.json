@@ -1,12 +1,13 @@
 {
-  "name": "react-example",
+  "name": "f1-race-analytics",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "tsx server.ts",
     "build": "vite build",
-    "start": "vite preview",
+    "preview": "vite preview",
+    "start": "NODE_ENV=production tsx server.ts",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
   },
