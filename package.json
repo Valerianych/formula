@@ -9,7 +9,10 @@
     "preview": "vite preview",
     "start": "NODE_ENV=production tsx server.ts",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "cache:year": "tsx scripts/cacheYear.ts",
+    "cache:2025": "tsx scripts/cacheYear.ts 2025",
+    "cache:2024": "tsx scripts/cacheYear.ts 2024"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
