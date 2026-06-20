@@ -3,6 +3,7 @@ import path from "path";
 import dotenv from "dotenv";
 import analyzeHandler from "./api/analyze.ts";
 import driverLapsHandler from "./api/driver-laps.ts";
+import raceDashboardHandler from "./api/race-dashboard.ts";
 import resultsHandler from "./api/results.ts";
 import sessionDataHandler from "./api/session-data.ts";
 import sessionsHandler from "./api/sessions.ts";
@@ -13,14 +14,16 @@ dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/sessions", sessionsHandler);
 app.get("/api/session-data", sessionDataHandler);
+app.get("/api/race-dashboard", raceDashboardHandler);
 app.get("/api/driver-laps", driverLapsHandler);
 app.get("/api/standings", standingsHandler);
 app.get("/api/results", resultsHandler);
 app.post("/api/analyze", analyzeHandler);
+app.post("/api/chat", analyzeHandler);
 
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
