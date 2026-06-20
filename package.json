@@ -13,12 +13,17 @@
     "cache:year": "tsx scripts/cacheYear.ts",
     "cache:2025": "tsx scripts/cacheYear.ts 2025",
     "cache:2024": "tsx scripts/cacheYear.ts 2024",
+    "cache:current": "tsx scripts/cacheCurrentSeason.ts",
+    "cache:current:2026": "tsx scripts/cacheCurrentSeason.ts 2026",
     "cache:fastf1": "python scripts/fastf1_cache.py",
     "cache:fastf1:2024": "python scripts/fastf1_cache.py 2024",
     "cache:fastf1:2024:telemetry": "python scripts/fastf1_cache.py 2024 --telemetry",
     "cache:fastf1:2025": "python scripts/fastf1_cache.py 2025",
+    "cache:fastf1:2026": "python scripts/fastf1_cache.py 2026",
+    "cache:fastf1:2026:telemetry": "python scripts/fastf1_cache.py 2026 --telemetry",
     "cache:all:2024": "npm run cache:2024 && npm run cache:fastf1:2024",
-    "cache:all:2025": "npm run cache:2025 && npm run cache:fastf1:2025"
+    "cache:all:2025": "npm run cache:2025 && npm run cache:fastf1:2025",
+    "cache:all:2026": "npm run cache:current:2026"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
