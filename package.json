@@ -21,6 +21,10 @@
     "cache:fastf1:2025": "python scripts/fastf1_cache.py 2025",
     "cache:fastf1:2026": "python scripts/fastf1_cache.py 2026",
     "cache:fastf1:2026:telemetry": "python scripts/fastf1_cache.py 2026 --telemetry",
+    "cache:maps": "python scripts/cache_maps.py",
+    "cache:maps:2024": "python scripts/cache_maps.py 2024",
+    "cache:maps:2025": "python scripts/cache_maps.py 2025",
+    "cache:maps:2026": "python scripts/cache_maps.py 2026",
     "cache:all:2024": "npm run cache:2024 && npm run cache:fastf1:2024",
     "cache:all:2025": "npm run cache:2025 && npm run cache:fastf1:2025",
     "cache:all:2026": "npm run cache:current:2026"
