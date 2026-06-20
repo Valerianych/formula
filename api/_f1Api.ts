@@ -1,9 +1,22 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
 const OPENF1_BASE = "https://api.openf1.org/v1";
 const JOLPICA_BASE = "https://api.jolpi.ca/ergast/f1";
+const CACHE_ROOT = path.join(process.cwd(), "data", "openf1-cache");
 
 export function parseYear(raw: unknown, fallback = 2025) {
   const year = Number(raw || fallback);
   return Number.isFinite(year) ? year : fallback;
+}
+
+function currentYear() {
+  return new Date().getFullYear();
+}
+
+function isHistoricalYear(year: any) {
+  const parsed = Number(year);
+  return Number.isFinite(parsed) && parsed < currentYear();
 }
 
 function compact<T>(items: T[], maxItems: number): T[] {
@@ -34,7 +47,50 @@ function safeDate(value: any) {
   return Number.isFinite(time) ? time : 0;
 }
 
-export async function fetchJson(url: string, timeoutMs = 12_000) {
+function normalizeText(value: any) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/grand prix|race|gp/g, "")
+    .replace(/[^a-zа-я0-9]/gi, "")
+    .trim();
+}
+
+function urlCacheFile(url: string) {
+  const parsed = new URL(url);
+  const source = parsed.hostname.includes("jolpi") ? "jolpica" : "openf1";
+  const endpoint = parsed.pathname.split("/").filter(Boolean).pop() || "endpoint";
+  const key = Buffer.from(url).toString("base64url");
+  return path.join(CACHE_ROOT, source, endpoint, `${key}.json`);
+}
+
+function raceDashboardCacheFile(sessionKey: number) {
+  return path.join(CACHE_ROOT, "race-dashboard", `${sessionKey}.json`);
+}
+
+function sessionIndexFile(sessionKey: number) {
+  return path.join(CACHE_ROOT, "session-index", `${sessionKey}.json`);
+}
+
+async function readCacheFile(filePath: string) {
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    const payload = JSON.parse(raw);
+    return payload?.data ?? payload;
+  } catch {
+    return null;
+  }
+}
+
+async function writeCacheFile(filePath: string, url: string | null, data: any) {
+  try {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify({ savedAt: new Date().toISOString(), url, data }, null, 2), "utf8");
+  } catch {
+    // Cache is optional. Do not break the API if the file system is read-only.
+  }
+}
+
+async function fetchJsonNetwork(url: string, timeoutMs = 12_000) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -49,9 +105,26 @@ export async function fetchJson(url: string, timeoutMs = 12_000) {
   }
 }
 
-async function optionalFetch(url: string, fallback: any[] = [], timeoutMs = 12_000) {
+export async function fetchJson(url: string, timeoutMs = 12_000, cacheFirst = false) {
+  const filePath = urlCacheFile(url);
+  const cached = await readCacheFile(filePath);
+  const shouldUseCacheFirst = process.env.F1_REFRESH_CACHE !== "1" && (cacheFirst || process.env.F1_CACHE_FIRST === "1");
+
+  if (shouldUseCacheFirst && cached) return cached;
+
   try {
-    const data = await fetchJson(url, timeoutMs);
+    const data = await fetchJsonNetwork(url, timeoutMs);
+    await writeCacheFile(filePath, url, data);
+    return data;
+  } catch (error) {
+    if (cached) return cached;
+    throw error;
+  }
+}
+
+async function optionalFetch(url: string, fallback: any[] = [], timeoutMs = 12_000, cacheFirst = false) {
+  try {
+    const data = await fetchJson(url, timeoutMs, cacheFirst);
     return Array.isArray(data) ? data : fallback;
   } catch {
     return fallback;
@@ -60,10 +133,10 @@ async function optionalFetch(url: string, fallback: any[] = [], timeoutMs = 12_0
 
 function formatSession(session: any) {
   return {
-    session_key: session.session_key,
-    session_name: session.session_name,
-    session_type: session.session_type || session.session_name,
-    meeting_key: session.meeting_key,
+    session_key: Number(session.session_key),
+    session_name: session.session_name || "Race",
+    session_type: session.session_type || session.session_name || "Race",
+    meeting_key: session.meeting_key ?? null,
     meeting_name: session.meeting_name || `${session.location || "Unknown"} Grand Prix`,
     location: session.location || "—",
     country_name: session.country_name || "—",
@@ -73,6 +146,18 @@ function formatSession(session: any) {
     date_end: session.date_end,
     gmt_offset: session.gmt_offset,
   };
+}
+
+async function writeSessionIndex(sessions: any[]) {
+  for (const session of sessions || []) {
+    if (Number.isFinite(Number(session.session_key))) {
+      await writeCacheFile(sessionIndexFile(Number(session.session_key)), null, session);
+    }
+  }
+}
+
+async function readSessionIndex(sessionKey: number) {
+  return readCacheFile(sessionIndexFile(sessionKey));
 }
 
 function formatDriver(driver: any, result: any, startGrid: any) {
@@ -89,7 +174,7 @@ function formatDriver(driver: any, result: any, startGrid: any) {
     starting_position: startGrid?.position ?? null,
     finishing_position: result?.position ?? null,
     classified_laps: result?.number_of_laps ?? null,
-    gap_to_leader: result?.gap_to_leader ?? null,
+    gap_to_leader: result?.gap_to_leader ?? result?.status ?? null,
     duration: result?.duration ?? null,
     dnf: Boolean(result?.dnf),
     dns: Boolean(result?.dns),
@@ -97,14 +182,10 @@ function formatDriver(driver: any, result: any, startGrid: any) {
   };
 }
 
-function fallbackDriver(driverNumber: number, result: any, startGrid: any) {
-  return formatDriver({ driver_number: driverNumber, full_name: `Пилот #${driverNumber}` }, result, startGrid);
-}
-
 function formatLap(lap: any) {
   return {
-    driver_number: lap.driver_number,
-    lap_number: lap.lap_number,
+    driver_number: Number(lap.driver_number),
+    lap_number: Number(lap.lap_number),
     lap_duration: lap.lap_duration ?? null,
     duration_sector_1: lap.duration_sector_1 ?? null,
     duration_sector_2: lap.duration_sector_2 ?? null,
@@ -118,11 +199,11 @@ function formatLap(lap: any) {
 }
 
 function formatPit(pit: any) {
-  return { driver_number: pit.driver_number, lap_number: pit.lap_number ?? null, date: pit.date ?? null, lane_duration: pit.lane_duration ?? null, stop_duration: pit.stop_duration ?? null };
+  return { driver_number: Number(pit.driver_number), lap_number: pit.lap_number ?? null, date: pit.date ?? null, lane_duration: pit.lane_duration ?? null, stop_duration: pit.stop_duration ?? null };
 }
 
 function formatStint(stint: any) {
-  return { driver_number: stint.driver_number, stint_number: stint.stint_number, compound: stint.compound || "UNKNOWN", lap_start: stint.lap_start ?? null, lap_end: stint.lap_end ?? null, tyre_age_at_start: stint.tyre_age_at_start ?? null };
+  return { driver_number: Number(stint.driver_number), stint_number: stint.stint_number, compound: stint.compound || "UNKNOWN", lap_start: stint.lap_start ?? null, lap_end: stint.lap_end ?? null, tyre_age_at_start: stint.tyre_age_at_start ?? null };
 }
 
 function formatEvent(event: any) {
@@ -179,9 +260,7 @@ function buildDriverSummary(driver: any, data: any) {
 function analyzeDriverIssues(driver: any, summary: any, allPitDurations: number[]) {
   const issues: any[] = [];
   for (const event of summary.race_control_events || []) {
-    if (messageLooksLikeIssue(event.message)) {
-      issues.push(buildIssue(driver, { type: /penalty/i.test(event.message) ? "penalty" : "race_control", severity: /penalty|collision|unsafe/i.test(event.message) ? "high" : "medium", lap_number: event.lap_number ?? null, message: `Race Control отметил событие: ${event.message}`, source: "race_control" }));
-    }
+    if (messageLooksLikeIssue(event.message)) issues.push(buildIssue(driver, { type: /penalty/i.test(event.message) ? "penalty" : "race_control", severity: /penalty|collision|unsafe/i.test(event.message) ? "high" : "medium", lap_number: event.lap_number ?? null, message: `Race Control отметил событие: ${event.message}`, source: "race_control" }));
   }
   if (driver.dnf) issues.push(buildIssue(driver, { type: "dnf", severity: "high", message: "Пилот не финишировал. Это проблемный момент гонки, но причина должна подтверждаться событиями Race Control.", source: "session_result" }));
   if (driver.dns) issues.push(buildIssue(driver, { type: "dns", severity: "high", message: "Пилот не стартовал в гонке.", source: "session_result" }));
@@ -216,17 +295,102 @@ function normalizeLocation(points: any[]) {
   return points.map((point) => ({ date: point.date, driver_number: point.driver_number, x: Number((((Number(point.x) - minX) / width) * 100).toFixed(3)), y: Number((((Number(point.y) - minY) / height) * 100).toFixed(3)), z: point.z ?? null }));
 }
 
-async function sessionHasUsableData(sessionKey: number) {
-  const [drivers, results, laps] = await Promise.all([
-    optionalFetch(`${OPENF1_BASE}/drivers?session_key=${sessionKey}`, [], 5000),
-    optionalFetch(`${OPENF1_BASE}/session_result?session_key=${sessionKey}`, [], 5000),
-    optionalFetch(`${OPENF1_BASE}/laps?session_key=${sessionKey}`, [], 5000),
-  ]);
-  return drivers.length > 0 || results.length > 0 || laps.length > 0;
+function isRunningStatus(status: string) {
+  return /finished|\+\d+\s*lap/i.test(status || "");
+}
+
+function buildJolpicaDashboard(session: any, race: any, reason: string) {
+  const results = race?.Results || [];
+  const drivers = results.map((result: any) => {
+    const driverName = `${result.Driver?.givenName || ""} ${result.Driver?.familyName || ""}`.trim() || `Пилот ${result.number || result.position}`;
+    const status = result.status || result.Time?.time || "—";
+    return {
+      driver_number: Number(result.number || result.Driver?.permanentNumber || result.position),
+      broadcast_name: result.Driver?.code || driverName,
+      full_name: driverName,
+      first_name: result.Driver?.givenName || null,
+      last_name: result.Driver?.familyName || null,
+      name_acronym: result.Driver?.code || driverName.slice(0, 3).toUpperCase(),
+      team_name: result.Constructor?.name || "Команда не указана",
+      team_colour: "666666",
+      headshot_url: "https://media.formula1.com/d_driver_fallback_image.png",
+      starting_position: Number(result.grid) > 0 ? Number(result.grid) : null,
+      finishing_position: Number(result.position) || null,
+      classified_laps: Number(result.laps) || null,
+      gap_to_leader: result.position === "1" ? result.Time?.time || "Победитель" : status,
+      duration: result.Time?.time || null,
+      dnf: !isRunningStatus(status),
+      dns: false,
+      dsq: /disqualified/i.test(status),
+      status,
+    };
+  });
+  const driverSummaries = drivers.map((driver: any) => buildDriverSummary(driver, { laps: [], pitStops: [], stints: [], positions: [], events: [] }));
+  const summary = buildRaceSummary(session, drivers, { laps: [], pitStops: [], events: [], weather: [] });
+
+  return {
+    session: {
+      ...session,
+      meeting_name: race?.raceName || session.meeting_name,
+      location: race?.Circuit?.Location?.locality || session.location,
+      country_name: race?.Circuit?.Location?.country || session.country_name,
+      date_start: race?.date || session.date_start,
+    },
+    summary,
+    drivers,
+    driver_summaries: driverSummaries,
+    race_result: drivers,
+    starting_grid: [],
+    laps: [],
+    pit_stops: [],
+    stints: [],
+    positions: [],
+    intervals: [],
+    events: [],
+    race_control: [],
+    weather: [],
+    overtakes: [],
+    team_radio: [],
+    track_map: { source_driver_number: null, source_driver_name: null, points: [], note: "Карта недоступна: используется исторический fallback Jolpica без координат OpenF1." },
+    issues: [],
+    data_quality: {
+      source: "Jolpica historical fallback + OpenF1 cache",
+      has_drivers: drivers.length > 0,
+      has_named_drivers: drivers.length > 0,
+      has_session_result: drivers.length > 0,
+      has_laps: false,
+      has_pit_stops: false,
+      has_stints: false,
+      has_positions: false,
+      has_intervals: false,
+      has_location: false,
+      has_overtakes: false,
+      has_team_radio: false,
+      no_mock_data: true,
+      cached_historical_data: true,
+      note: `${reason}. Показаны исторические результаты Jolpica; круги, карта, пит-стопы и телеметрия доступны только если их вернул OpenF1.`,
+    },
+  };
+}
+
+function findJolpicaRaceForSession(session: any, races: any[]) {
+  const sessionText = normalizeText(`${session.meeting_name} ${session.location} ${session.country_name}`);
+  return races.find((race: any) => {
+    const raceText = normalizeText(`${race.raceName} ${race.Circuit?.Location?.locality} ${race.Circuit?.Location?.country}`);
+    const locality = normalizeText(race.Circuit?.Location?.locality);
+    const raceName = normalizeText(race.raceName);
+    return sessionText.includes(locality) || sessionText.includes(raceName) || raceText.includes(normalizeText(session.location));
+  }) || null;
+}
+
+export async function getJolpicaFullRaceResults(year: number) {
+  const data = await fetchJson(`${JOLPICA_BASE}/${year}/results.json?limit=2000`, 16_000, isHistoricalYear(year));
+  return data?.MRData?.RaceTable?.Races || [];
 }
 
 export async function getOpenF1Sessions(year: number) {
-  const data = await fetchJson(`${OPENF1_BASE}/sessions?year=${year}`);
+  const cacheFirst = isHistoricalYear(year);
+  const data = await fetchJson(`${OPENF1_BASE}/sessions?year=${year}`, 12_000, cacheFirst);
   if (!Array.isArray(data)) return [];
   const now = Date.now();
   const sessions = data
@@ -234,10 +398,8 @@ export async function getOpenF1Sessions(year: number) {
     .filter((session: any) => safeDate(session.date_start) <= now)
     .map(formatSession)
     .sort((a: any, b: any) => safeDate(b.date_start) - safeDate(a.date_start));
-
-  const checked = await Promise.all(sessions.map(async (session: any) => ({ session, hasData: await sessionHasUsableData(session.session_key) })));
-  const usable = checked.filter((item) => item.hasData).map((item) => ({ ...item.session, has_openf1_data: true }));
-  return usable.length ? usable : sessions.map((session: any) => ({ ...session, has_openf1_data: false }));
+  await writeSessionIndex(sessions);
+  return sessions.map((session: any) => ({ ...session, cached_possible: cacheFirst }));
 }
 
 export async function getOpenF1SessionData(sessionKey: number) {
@@ -245,23 +407,39 @@ export async function getOpenF1SessionData(sessionKey: number) {
 }
 
 export async function getOpenF1RaceDashboard(sessionKey: number) {
-  const sessions = await fetchJson(`${OPENF1_BASE}/sessions?session_key=${sessionKey}`);
-  const sessionInfo = Array.isArray(sessions) && sessions.length > 0 ? formatSession(sessions[0]) : null;
+  const dashboardCache = raceDashboardCacheFile(sessionKey);
+  if (process.env.F1_REFRESH_CACHE !== "1") {
+    const cachedDashboard = await readCacheFile(dashboardCache);
+    if (cachedDashboard?.summary) return { ...cachedDashboard, loaded_from_local_cache: true };
+  }
+
+  let sessionInfo: any = null;
+  let openF1Problem = "";
+  try {
+    const sessions = await fetchJson(`${OPENF1_BASE}/sessions?session_key=${sessionKey}`, 12_000, false);
+    sessionInfo = Array.isArray(sessions) && sessions.length > 0 ? formatSession(sessions[0]) : null;
+  } catch (error: any) {
+    openF1Problem = error?.message || "OpenF1 session request failed";
+    const indexed = await readSessionIndex(sessionKey);
+    if (indexed) sessionInfo = indexed;
+  }
   if (!sessionInfo) return null;
 
+  const year = Number(sessionInfo.year);
+  const cacheFirst = isHistoricalYear(year);
   const [rawDrivers, sessionResult, startingGrid, rawLaps, rawPitStops, rawStints, rawPositions, rawIntervals, rawRaceControl, rawWeather, rawOvertakes, rawTeamRadio] = await Promise.all([
-    optionalFetch(`${OPENF1_BASE}/drivers?session_key=${sessionKey}`),
-    optionalFetch(`${OPENF1_BASE}/session_result?session_key=${sessionKey}`),
-    optionalFetch(`${OPENF1_BASE}/starting_grid?session_key=${sessionKey}`),
-    optionalFetch(`${OPENF1_BASE}/laps?session_key=${sessionKey}`, [], 16_000),
-    optionalFetch(`${OPENF1_BASE}/pit?session_key=${sessionKey}`),
-    optionalFetch(`${OPENF1_BASE}/stints?session_key=${sessionKey}`),
-    optionalFetch(`${OPENF1_BASE}/position?session_key=${sessionKey}`, [], 16_000),
-    optionalFetch(`${OPENF1_BASE}/intervals?session_key=${sessionKey}`, [], 10_000),
-    optionalFetch(`${OPENF1_BASE}/race_control?session_key=${sessionKey}`),
-    optionalFetch(`${OPENF1_BASE}/weather?session_key=${sessionKey}`),
-    optionalFetch(`${OPENF1_BASE}/overtakes?session_key=${sessionKey}`),
-    optionalFetch(`${OPENF1_BASE}/team_radio?session_key=${sessionKey}`),
+    optionalFetch(`${OPENF1_BASE}/drivers?session_key=${sessionKey}`, [], 12_000, cacheFirst),
+    optionalFetch(`${OPENF1_BASE}/session_result?session_key=${sessionKey}`, [], 12_000, cacheFirst),
+    optionalFetch(`${OPENF1_BASE}/starting_grid?session_key=${sessionKey}`, [], 12_000, cacheFirst),
+    optionalFetch(`${OPENF1_BASE}/laps?session_key=${sessionKey}`, [], 16_000, cacheFirst),
+    optionalFetch(`${OPENF1_BASE}/pit?session_key=${sessionKey}`, [], 12_000, cacheFirst),
+    optionalFetch(`${OPENF1_BASE}/stints?session_key=${sessionKey}`, [], 12_000, cacheFirst),
+    optionalFetch(`${OPENF1_BASE}/position?session_key=${sessionKey}`, [], 16_000, cacheFirst),
+    optionalFetch(`${OPENF1_BASE}/intervals?session_key=${sessionKey}`, [], 10_000, cacheFirst),
+    optionalFetch(`${OPENF1_BASE}/race_control?session_key=${sessionKey}`, [], 12_000, cacheFirst),
+    optionalFetch(`${OPENF1_BASE}/weather?session_key=${sessionKey}`, [], 12_000, cacheFirst),
+    optionalFetch(`${OPENF1_BASE}/overtakes?session_key=${sessionKey}`, [], 12_000, cacheFirst),
+    optionalFetch(`${OPENF1_BASE}/team_radio?session_key=${sessionKey}`, [], 12_000, cacheFirst),
   ]);
 
   const laps = rawLaps.map(formatLap).filter((lap: any) => Number.isFinite(Number(lap.driver_number)) && Number.isFinite(Number(lap.lap_number)));
@@ -287,17 +465,27 @@ export async function getOpenF1RaceDashboard(sessionKey: number) {
       return posA - posB || a.driver_number - b.driver_number;
     });
 
+  if (!drivers.length || (!sessionResult.length && !laps.length)) {
+    const jolpicaRaces = Number.isFinite(year) ? await getJolpicaFullRaceResults(year).catch(() => []) : [];
+    const fallbackRace = findJolpicaRaceForSession(sessionInfo, jolpicaRaces);
+    if (fallbackRace) {
+      const fallbackDashboard = buildJolpicaDashboard(sessionInfo, fallbackRace, openF1Problem || "OpenF1 не вернул полезные данные по этой сессии");
+      await writeCacheFile(dashboardCache, null, fallbackDashboard);
+      return fallbackDashboard;
+    }
+  }
+
   const allPitDurations = pitStops.map((pit: any) => Number(pit.stop_duration ?? pit.lane_duration)).filter(Number.isFinite);
   const driverSummaries = drivers.map((driver: any) => buildDriverSummary(driver, { laps, pitStops, stints, positions, events }));
   const issues = driverSummaries.flatMap((summary: any) => analyzeDriverIssues(summary, summary, allPitDurations));
 
   const mapDriver = drivers.find((driver: any) => driver.finishing_position === 1) || drivers[0];
-  const rawLocation = mapDriver ? await optionalFetch(`${OPENF1_BASE}/location?session_key=${sessionKey}&driver_number=${mapDriver.driver_number}`, [], 12_000) : [];
+  const rawLocation = mapDriver ? await optionalFetch(`${OPENF1_BASE}/location?session_key=${sessionKey}&driver_number=${mapDriver.driver_number}`, [], 12_000, cacheFirst) : [];
   const sampledLocation = compact(rawLocation, 1200);
   const trackMap = { source_driver_number: mapDriver?.driver_number ?? null, source_driver_name: mapDriver?.full_name ?? null, points: normalizeLocation(sampledLocation), note: sampledLocation.length ? "Карта построена по x/y координатам OpenF1 одного пилота и подходит для схемы трассы/replay." : "OpenF1 не вернул location-точки для карты этой сессии." };
   const raceSummary = buildRaceSummary(sessionInfo, drivers, { laps, pitStops, events, weather });
 
-  return {
+  const dashboard = {
     session: sessionInfo,
     summary: raceSummary,
     drivers,
@@ -330,9 +518,12 @@ export async function getOpenF1RaceDashboard(sessionKey: number) {
       has_overtakes: rawOvertakes.length > 0,
       has_team_radio: rawTeamRadio.length > 0,
       no_mock_data: true,
-      note: drivers.length ? "Данные найдены." : "OpenF1 вернул сессию, но не вернул пилотов/круги/результаты. Выберите другую гонку.",
+      cached_historical_data: cacheFirst,
+      note: drivers.length ? "Данные найдены и сохранены в локальный кэш проекта." : "OpenF1 вернул сессию, но не вернул пилотов/круги/результаты. Выберите другую гонку.",
     },
   };
+  await writeCacheFile(dashboardCache, null, dashboard);
+  return dashboard;
 }
 
 export async function getOpenF1DriverLaps(sessionKey: number, driverNumber: number) {
@@ -352,8 +543,7 @@ export async function getJolpicaStandings(year: number) {
 }
 
 export async function getJolpicaRaceResults(year: number) {
-  const data = await fetchJson(`${JOLPICA_BASE}/${year}/results/1.json`);
-  const races = data?.MRData?.RaceTable?.Races || [];
+  const races = await getJolpicaFullRaceResults(year);
   return races.map((race: any) => {
     const winnerResult = race.Results?.[0];
     const winner = winnerResult ? `${winnerResult.Driver.givenName} ${winnerResult.Driver.familyName}` : "Победитель пока не указан";
