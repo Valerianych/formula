@@ -150,9 +150,7 @@ function formatSession(session: any) {
 
 async function writeSessionIndex(sessions: any[]) {
   for (const session of sessions || []) {
-    if (Number.isFinite(Number(session.session_key))) {
-      await writeCacheFile(sessionIndexFile(Number(session.session_key)), null, session);
-    }
+    if (Number.isFinite(Number(session.session_key))) await writeCacheFile(sessionIndexFile(Number(session.session_key)), null, session);
   }
 }
 
@@ -160,10 +158,29 @@ async function readSessionIndex(sessionKey: number) {
   return readCacheFile(sessionIndexFile(sessionKey));
 }
 
-function formatDriver(driver: any, result: any, startGrid: any) {
+function jolpicaExtra(result: any) {
+  if (!result) return {};
+  const finishTime = result.Time?.time || result.status || null;
+  const bestLapText = result.FastestLap?.Time?.time || null;
+  const fastestLapRank = result.FastestLap?.rank ? Number(result.FastestLap.rank) : null;
+  const fastestLapNumber = result.FastestLap?.lap ? Number(result.FastestLap.lap) : null;
+  return {
+    finish_time: finishTime,
+    status: result.status || finishTime,
+    duration: finishTime,
+    best_lap_text: bestLapText,
+    fastest_lap_rank: fastestLapRank,
+    fastest_lap_lap: fastestLapNumber,
+    fastest_lap_average_speed: result.FastestLap?.AverageSpeed?.speed || null,
+  };
+}
+
+function formatDriver(driver: any, result: any, startGrid: any, jolpicaResult?: any) {
+  const extra = jolpicaExtra(jolpicaResult);
+  const sessionResultStatus = result?.status || result?.gap_to_leader || null;
   return {
     driver_number: Number(driver.driver_number),
-    broadcast_name: driver.broadcast_name || driver.last_name || `#${driver.driver_number}`,
+    broadcast_name: driver.broadcast_name || driver.last_name || extra?.name_acronym || `#${driver.driver_number}`,
     full_name: driver.full_name || `${driver.first_name || ""} ${driver.last_name || ""}`.trim() || driver.broadcast_name || `Пилот #${driver.driver_number}`,
     first_name: driver.first_name || null,
     last_name: driver.last_name || null,
@@ -171,11 +188,17 @@ function formatDriver(driver: any, result: any, startGrid: any) {
     team_name: driver.team_name || "Команда не указана",
     team_colour: driver.team_colour || "666666",
     headshot_url: driver.headshot_url || "https://media.formula1.com/d_driver_fallback_image.png",
-    starting_position: startGrid?.position ?? null,
-    finishing_position: result?.position ?? null,
-    classified_laps: result?.number_of_laps ?? null,
-    gap_to_leader: result?.gap_to_leader ?? result?.status ?? null,
-    duration: result?.duration ?? null,
+    starting_position: startGrid?.position ?? startGrid?.grid ?? null,
+    finishing_position: result?.position ?? jolpicaResult?.position ? Number(result?.position ?? jolpicaResult?.position) : null,
+    classified_laps: result?.number_of_laps ?? jolpicaResult?.laps ?? null,
+    gap_to_leader: result?.gap_to_leader ?? extra.finish_time ?? sessionResultStatus,
+    duration: result?.duration ?? extra.duration ?? null,
+    finish_time: extra.finish_time ?? result?.duration ?? result?.gap_to_leader ?? null,
+    status: extra.status ?? sessionResultStatus ?? null,
+    best_lap_text: extra.best_lap_text ?? null,
+    fastest_lap_rank: extra.fastest_lap_rank ?? null,
+    fastest_lap_lap: extra.fastest_lap_lap ?? null,
+    fastest_lap_average_speed: extra.fastest_lap_average_speed ?? null,
     dnf: Boolean(result?.dnf),
     dns: Boolean(result?.dns),
     dsq: Boolean(result?.dsq),
@@ -214,7 +237,7 @@ function collectDriverNumbers(...groups: any[][]) {
   const numbers = new Set<number>();
   for (const group of groups) {
     for (const item of group || []) {
-      for (const key of ["driver_number", "overtaking_driver_number", "overtaken_driver_number"]) {
+      for (const key of ["driver_number", "overtaking_driver_number", "overtaken_driver_number", "number"]) {
         const value = Number(item?.[key]);
         if (Number.isFinite(value) && value > 0) numbers.add(value);
       }
@@ -244,6 +267,7 @@ function buildDriverSummary(driver: any, data: any) {
     ...driver,
     laps_count: driverLaps.length,
     best_lap: minNumber(validLapTimes),
+    best_lap_text: driver.best_lap_text || null,
     average_lap: average(validLapTimes),
     median_lap: median(validLapTimes),
     pit_stop_count: driverPits.length,
@@ -280,10 +304,13 @@ function analyzeDriverIssues(driver: any, summary: any, allPitDurations: number[
 function buildRaceSummary(session: any, drivers: any[], data: any) {
   const top3 = drivers.filter((driver) => Number.isFinite(driver.finishing_position)).sort((a, b) => a.finishing_position - b.finishing_position).slice(0, 3);
   const lapTimes = data.laps.filter((lap: any) => lap.lap_duration && lap.lap_duration > 0 && !lap.is_pit_out_lap).map((lap: any) => ({ driver_number: lap.driver_number, lap_number: lap.lap_number, lap_duration: lap.lap_duration }));
-  const fastestLap = lapTimes.length ? lapTimes.reduce((best: any, lap: any) => (lap.lap_duration < best.lap_duration ? lap : best), lapTimes[0]) : null;
+  const fastestLapFromOpenF1 = lapTimes.length ? lapTimes.reduce((best: any, lap: any) => (lap.lap_duration < best.lap_duration ? lap : best), lapTimes[0]) : null;
+  const fastestLapFromJolpica = drivers
+    .filter((driver: any) => driver.best_lap_text)
+    .sort((a: any, b: any) => (Number(a.fastest_lap_rank) || 99) - (Number(b.fastest_lap_rank) || 99))[0] || null;
   const pitDurations = data.pitStops.map((pit: any) => Number(pit.stop_duration ?? pit.lane_duration)).filter(Number.isFinite);
   const slowestPitStop = data.pitStops.filter((pit: any) => Number.isFinite(Number(pit.stop_duration ?? pit.lane_duration))).sort((a: any, b: any) => Number(b.stop_duration ?? b.lane_duration) - Number(a.stop_duration ?? a.lane_duration))[0] || null;
-  return { session, winner: top3[0] || null, top3, total_drivers: drivers.length, total_laps_with_times: data.laps.length, dnf_count: drivers.filter((driver) => driver.dnf).length, dns_count: drivers.filter((driver) => driver.dns).length, dsq_count: drivers.filter((driver) => driver.dsq).length, pit_stop_count: data.pitStops.length, average_pit_stop: average(pitDurations), slowest_pit_stop: slowestPitStop, fastest_lap: fastestLap, race_control_event_count: data.events.length, weather_latest: data.weather[data.weather.length - 1] || null };
+  return { session, winner: top3[0] || null, top3, total_drivers: drivers.length, total_laps_with_times: data.laps.length, dnf_count: drivers.filter((driver) => driver.dnf).length, dns_count: drivers.filter((driver) => driver.dns).length, dsq_count: drivers.filter((driver) => driver.dsq).length, pit_stop_count: data.pitStops.length, average_pit_stop: average(pitDurations), slowest_pit_stop: slowestPitStop, fastest_lap: fastestLapFromOpenF1 || fastestLapFromJolpica, race_control_event_count: data.events.length, weather_latest: data.weather[data.weather.length - 1] || null };
 }
 
 function normalizeLocation(points: any[]) {
@@ -296,7 +323,7 @@ function normalizeLocation(points: any[]) {
 }
 
 function isRunningStatus(status: string) {
-  return /finished|\+\d+\s*lap/i.test(status || "");
+  return /finished|\+\d|\+\d+\s*lap/i.test(status || "");
 }
 
 function buildJolpicaDashboard(session: any, race: any, reason: string) {
@@ -318,24 +345,23 @@ function buildJolpicaDashboard(session: any, race: any, reason: string) {
       finishing_position: Number(result.position) || null,
       classified_laps: Number(result.laps) || null,
       gap_to_leader: result.position === "1" ? result.Time?.time || "Победитель" : status,
-      duration: result.Time?.time || null,
+      duration: result.Time?.time || status,
+      finish_time: result.Time?.time || status,
+      status,
+      best_lap_text: result.FastestLap?.Time?.time || null,
+      fastest_lap_rank: result.FastestLap?.rank ? Number(result.FastestLap.rank) : null,
+      fastest_lap_lap: result.FastestLap?.lap ? Number(result.FastestLap.lap) : null,
+      fastest_lap_average_speed: result.FastestLap?.AverageSpeed?.speed || null,
       dnf: !isRunningStatus(status),
       dns: false,
       dsq: /disqualified/i.test(status),
-      status,
     };
   });
   const driverSummaries = drivers.map((driver: any) => buildDriverSummary(driver, { laps: [], pitStops: [], stints: [], positions: [], events: [] }));
   const summary = buildRaceSummary(session, drivers, { laps: [], pitStops: [], events: [], weather: [] });
 
   return {
-    session: {
-      ...session,
-      meeting_name: race?.raceName || session.meeting_name,
-      location: race?.Circuit?.Location?.locality || session.location,
-      country_name: race?.Circuit?.Location?.country || session.country_name,
-      date_start: race?.date || session.date_start,
-    },
+    session: { ...session, meeting_name: race?.raceName || session.meeting_name, location: race?.Circuit?.Location?.locality || session.location, country_name: race?.Circuit?.Location?.country || session.country_name, date_start: race?.date || session.date_start },
     summary,
     drivers,
     driver_summaries: driverSummaries,
@@ -353,23 +379,7 @@ function buildJolpicaDashboard(session: any, race: any, reason: string) {
     team_radio: [],
     track_map: { source_driver_number: null, source_driver_name: null, points: [], note: "Карта недоступна: используется исторический fallback Jolpica без координат OpenF1." },
     issues: [],
-    data_quality: {
-      source: "Jolpica historical fallback + OpenF1 cache",
-      has_drivers: drivers.length > 0,
-      has_named_drivers: drivers.length > 0,
-      has_session_result: drivers.length > 0,
-      has_laps: false,
-      has_pit_stops: false,
-      has_stints: false,
-      has_positions: false,
-      has_intervals: false,
-      has_location: false,
-      has_overtakes: false,
-      has_team_radio: false,
-      no_mock_data: true,
-      cached_historical_data: true,
-      note: `${reason}. Показаны исторические результаты Jolpica; круги, карта, пит-стопы и телеметрия доступны только если их вернул OpenF1.`,
-    },
+    data_quality: { source: "Jolpica historical fallback + OpenF1 cache", has_drivers: drivers.length > 0, has_named_drivers: drivers.length > 0, has_session_result: drivers.length > 0, has_laps: false, has_pit_stops: false, has_stints: false, has_positions: false, has_intervals: false, has_location: false, has_overtakes: false, has_team_radio: false, no_mock_data: true, cached_historical_data: true, has_finish_times: drivers.some((driver: any) => driver.finish_time), has_fastest_laps: drivers.some((driver: any) => driver.best_lap_text), note: `${reason}. Показаны исторические результаты Jolpica; круги, карта, пит-стопы и телеметрия доступны только если их вернул OpenF1.` },
   };
 }
 
@@ -393,11 +403,7 @@ export async function getOpenF1Sessions(year: number) {
   const data = await fetchJson(`${OPENF1_BASE}/sessions?year=${year}`, 12_000, cacheFirst);
   if (!Array.isArray(data)) return [];
   const now = Date.now();
-  const sessions = data
-    .filter((session: any) => session.session_name === "Race")
-    .filter((session: any) => safeDate(session.date_start) <= now)
-    .map(formatSession)
-    .sort((a: any, b: any) => safeDate(b.date_start) - safeDate(a.date_start));
+  const sessions = data.filter((session: any) => session.session_name === "Race").filter((session: any) => safeDate(session.date_start) <= now).map(formatSession).sort((a: any, b: any) => safeDate(b.date_start) - safeDate(a.date_start));
   await writeSessionIndex(sessions);
   return sessions.map((session: any) => ({ ...session, cached_possible: cacheFirst }));
 }
@@ -427,6 +433,10 @@ export async function getOpenF1RaceDashboard(sessionKey: number) {
 
   const year = Number(sessionInfo.year);
   const cacheFirst = isHistoricalYear(year);
+  const jolpicaRaces = Number.isFinite(year) ? await getJolpicaFullRaceResults(year).catch(() => []) : [];
+  const jolpicaRace = findJolpicaRaceForSession(sessionInfo, jolpicaRaces);
+  const jolpicaByNumber = new Map((jolpicaRace?.Results || []).map((result: any) => [Number(result.number || result.Driver?.permanentNumber || result.position), result]));
+
   const [rawDrivers, sessionResult, startingGrid, rawLaps, rawPitStops, rawStints, rawPositions, rawIntervals, rawRaceControl, rawWeather, rawOvertakes, rawTeamRadio] = await Promise.all([
     optionalFetch(`${OPENF1_BASE}/drivers?session_key=${sessionKey}`, [], 12_000, cacheFirst),
     optionalFetch(`${OPENF1_BASE}/session_result?session_key=${sessionKey}`, [], 12_000, cacheFirst),
@@ -452,12 +462,11 @@ export async function getOpenF1RaceDashboard(sessionKey: number) {
   const overtakes = compact(rawOvertakes, 500);
   const teamRadio = compact(rawTeamRadio, 80);
 
-  const resultByDriver = new Map(sessionResult.map((item: any) => [item.driver_number, item]));
-  const gridByDriver = new Map(startingGrid.map((item: any) => [item.driver_number, item]));
-  const driverNumbers = collectDriverNumbers(rawDrivers, sessionResult, startingGrid, laps, pitStops, stints, positions, intervals, events, overtakes);
+  const resultByDriver = new Map(sessionResult.map((item: any) => [Number(item.driver_number), item]));
+  const gridByDriver = new Map(startingGrid.map((item: any) => [Number(item.driver_number), item]));
+  const driverNumbers = collectDriverNumbers(rawDrivers, sessionResult, startingGrid, laps, pitStops, stints, positions, intervals, events, overtakes, jolpicaRace?.Results || []);
   const baseDrivers = rawDrivers.length ? rawDrivers : driverNumbers.map((driverNumber) => ({ driver_number: driverNumber, full_name: `Пилот #${driverNumber}` }));
-  const drivers = baseDrivers
-    .map((driver: any) => formatDriver(driver, resultByDriver.get(driver.driver_number), gridByDriver.get(driver.driver_number)))
+  const drivers = baseDrivers.map((driver: any) => formatDriver(driver, resultByDriver.get(Number(driver.driver_number)), gridByDriver.get(Number(driver.driver_number)), jolpicaByNumber.get(Number(driver.driver_number))))
     .filter((driver: any, index: number, self: any[]) => index === self.findIndex((item) => item.driver_number === driver.driver_number))
     .sort((a: any, b: any) => {
       const posA = a.finishing_position || Number.MAX_SAFE_INTEGER;
@@ -466,10 +475,8 @@ export async function getOpenF1RaceDashboard(sessionKey: number) {
     });
 
   if (!drivers.length || (!sessionResult.length && !laps.length)) {
-    const jolpicaRaces = Number.isFinite(year) ? await getJolpicaFullRaceResults(year).catch(() => []) : [];
-    const fallbackRace = findJolpicaRaceForSession(sessionInfo, jolpicaRaces);
-    if (fallbackRace) {
-      const fallbackDashboard = buildJolpicaDashboard(sessionInfo, fallbackRace, openF1Problem || "OpenF1 не вернул полезные данные по этой сессии");
+    if (jolpicaRace) {
+      const fallbackDashboard = buildJolpicaDashboard(sessionInfo, jolpicaRace, openF1Problem || "OpenF1 не вернул полезные данные по этой сессии");
       await writeCacheFile(dashboardCache, null, fallbackDashboard);
       return fallbackDashboard;
     }
@@ -478,7 +485,6 @@ export async function getOpenF1RaceDashboard(sessionKey: number) {
   const allPitDurations = pitStops.map((pit: any) => Number(pit.stop_duration ?? pit.lane_duration)).filter(Number.isFinite);
   const driverSummaries = drivers.map((driver: any) => buildDriverSummary(driver, { laps, pitStops, stints, positions, events }));
   const issues = driverSummaries.flatMap((summary: any) => analyzeDriverIssues(summary, summary, allPitDurations));
-
   const mapDriver = drivers.find((driver: any) => driver.finishing_position === 1) || drivers[0];
   const rawLocation = mapDriver ? await optionalFetch(`${OPENF1_BASE}/location?session_key=${sessionKey}&driver_number=${mapDriver.driver_number}`, [], 12_000, cacheFirst) : [];
   const sampledLocation = compact(rawLocation, 1200);
@@ -490,7 +496,7 @@ export async function getOpenF1RaceDashboard(sessionKey: number) {
     summary: raceSummary,
     drivers,
     driver_summaries: driverSummaries,
-    race_result: sessionResult,
+    race_result: sessionResult.length ? sessionResult : drivers,
     starting_grid: startingGrid,
     laps: compact(laps, 2200),
     pit_stops: pitStops,
@@ -505,7 +511,7 @@ export async function getOpenF1RaceDashboard(sessionKey: number) {
     track_map: trackMap,
     issues,
     data_quality: {
-      source: "OpenF1 API",
+      source: jolpicaRace ? "OpenF1 API + Jolpica historical results" : "OpenF1 API",
       has_drivers: drivers.length > 0,
       has_named_drivers: rawDrivers.length > 0,
       has_session_result: sessionResult.length > 0,
@@ -517,9 +523,12 @@ export async function getOpenF1RaceDashboard(sessionKey: number) {
       has_location: sampledLocation.length > 0,
       has_overtakes: rawOvertakes.length > 0,
       has_team_radio: rawTeamRadio.length > 0,
+      has_finish_times: drivers.some((driver: any) => driver.finish_time),
+      has_fastest_laps: drivers.some((driver: any) => driver.best_lap_text || driver.best_lap),
       no_mock_data: true,
       cached_historical_data: cacheFirst,
-      note: drivers.length ? "Данные найдены и сохранены в локальный кэш проекта." : "OpenF1 вернул сессию, но не вернул пилотов/круги/результаты. Выберите другую гонку.",
+      enriched_with_jolpica: Boolean(jolpicaRace),
+      note: drivers.length ? "Данные найдены, дополнены историческими результатами при наличии и сохранены в локальный кэш проекта." : "OpenF1 вернул сессию, но не вернул пилотов/круги/результаты. Выберите другую гонку.",
     },
   };
   await writeCacheFile(dashboardCache, null, dashboard);
