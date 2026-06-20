@@ -3,14 +3,31 @@ import { GoogleGenAI } from "@google/genai";
 
 let gigaChatTokenCache: { token: string; expiresAt: number } | null = null;
 
-function formatTime(sec: number | null) {
-  if (!sec) return "—";
-  const mins = Math.floor(sec / 60);
-  const remainingSecs = (sec % 60).toFixed(3);
-  return mins > 0 ? `${mins}:${remainingSecs.padStart(6, "0")}` : `${remainingSecs}с`;
+function enableGigaChatTlsFallback() {
+  if (process.env.GIGACHAT_IGNORE_TLS_ERRORS !== "false") {
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+  }
 }
 
-function safeSliceJson(value: any, maxLength = 12_000) {
+function displayTime(value: any) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "string") return value;
+  const sec = Number(value);
+  if (!Number.isFinite(sec) || sec <= 0) return String(value);
+  const mins = Math.floor(sec / 60);
+  const remainingSecs = (sec % 60).toFixed(3).padStart(6, "0");
+  return mins > 0 ? `${mins}:${remainingSecs}` : `${remainingSecs}с`;
+}
+
+function bestLap(driver: any) {
+  return driver?.best_lap_text || displayTime(driver?.best_lap);
+}
+
+function finishTime(driver: any) {
+  return displayTime(driver?.finish_time ?? driver?.duration ?? driver?.gap_to_leader ?? driver?.status);
+}
+
+function safeSliceJson(value: any, maxLength = 14_000) {
   const text = JSON.stringify(value, null, 2);
   return text.length <= maxLength ? text : `${text.slice(0, maxLength)}\n...контекст обрезан...`;
 }
@@ -25,6 +42,7 @@ async function getGigaChatAccessToken() {
 
   const authorizationKey = getGigaAuthKey();
   if (!authorizationKey) return null;
+  enableGigaChatTlsFallback();
 
   const response = await fetch(process.env.GIGACHAT_OAUTH_URL || "https://ngw.devices.sberbank.ru:9443/api/v2/oauth", {
     method: "POST",
@@ -51,11 +69,12 @@ async function getGigaChatAccessToken() {
 async function generateWithGigaChat(prompt: string, chatMessages: Array<{ role: string; content?: string; text?: string }> = []) {
   const token = await getGigaChatAccessToken();
   if (!token) return null;
+  enableGigaChatTlsFallback();
 
   const history = chatMessages
     .filter((message) => ["user", "assistant"].includes(message.role))
     .slice(-8)
-    .map((message) => ({ role: message.role, content: String(message.content || message.text || "").slice(0, 2000) }));
+    .map((message) => ({ role: message.role, content: String(message.content || message.text || "").slice(0, 1800) }));
 
   const response = await fetch(`${process.env.GIGACHAT_API_BASE || "https://gigachat.devices.sberbank.ru/api/v1"}/chat/completions`, {
     method: "POST",
@@ -65,7 +84,7 @@ async function generateWithGigaChat(prompt: string, chatMessages: Array<{ role: 
       messages: [
         {
           role: "system",
-          content: "Ты русскоязычный помощник по Формуле-1 внутри сайта аналитики гонок. Отвечай простым языком. Не выдумывай факты. Если данных нет в OpenF1-контексте, прямо скажи, что данных нет. По ошибкам пилотов используй аккуратные формулировки: возможный проблемный момент, Race Control отметил, по данным видно.",
+          content: "Ты русскоязычный помощник по Формуле-1 внутри сайта аналитики гонок. Отвечай по выбранной гонке в целом: победитель, топ-3, финишное время, лучший круг, сходы, сравнение пилотов. Не привязывайся к одному пилоту, если пользователь сам его не назвал. Не выдумывай факты. Если данных нет в контексте, прямо скажи, что данных нет. Объясняй простым языком.",
         },
         ...history,
         { role: "user", content: prompt },
@@ -84,18 +103,27 @@ function buildCompactContext(body: any) {
   const { session, driver, laps, weather, events, issues, summary } = body;
   const validLaps = Array.isArray(laps) ? laps.filter((lap: any) => lap.lap_duration && lap.lap_duration > 0) : [];
   const lapTimes = validLaps.map((lap: any) => lap.lap_duration);
-  const bestLap = lapTimes.length ? Math.min(...lapTimes) : null;
+  const bestLapValue = lapTimes.length ? Math.min(...lapTimes) : null;
   const avgLap = lapTimes.length ? lapTimes.reduce((sum: number, value: number) => sum + value, 0) / lapTimes.length : null;
   return {
     session,
     selected_driver: driver,
     summary,
-    driver_stats: driver ? { best_lap: bestLap, average_lap: avgLap, laps_with_time: validLaps.length } : null,
+    driver_stats: driver ? { best_lap: bestLapValue, average_lap: avgLap, laps_with_time: validLaps.length } : null,
     weather_latest: Array.isArray(weather) && weather.length ? weather[weather.length - 1] : null,
     race_control_events_count: Array.isArray(events) ? events.length : 0,
     race_control_events: Array.isArray(events) ? events.slice(0, 20) : [],
     issues: Array.isArray(issues) ? issues.slice(0, 30) : [],
   };
+}
+
+function topDriversText(drivers: any[], count = 5) {
+  const ranked = drivers
+    .filter((driver: any) => Number.isFinite(Number(driver.finishing_position)))
+    .sort((a: any, b: any) => Number(a.finishing_position) - Number(b.finishing_position))
+    .slice(0, count);
+  if (!ranked.length) return "Нет таблицы финиша.";
+  return ranked.map((driver: any) => `${driver.finishing_position}. ${driver.full_name} (${driver.team_name || "—"}) — финиш: ${finishTime(driver)}, лучший круг: ${bestLap(driver)}`).join("\n");
 }
 
 function buildFallbackAnswer(context: any, question: string, reason: string) {
@@ -107,33 +135,49 @@ function buildFallbackAnswer(context: any, question: string, reason: string) {
   const drivers = Array.isArray(context.driver_summaries) ? context.driver_summaries : [];
   const weather = context.weather_latest || summary.weather_latest;
   const dataQuality = context.data_quality || {};
+  const prefix = reason ? `GigaChat сейчас не отвечает: ${reason}\nПоказываю ответ по данным сайта.\n\n` : "";
 
-  const prefix = reason ? `GigaChat сейчас не отвечает: ${reason}\n\n` : "";
+  if (/^(привет|здрав|hi|hello|ты кто)/i.test(q)) {
+    return `${prefix}Я чат по выбранной гонке ${session.meeting_name || "F1"}. Могу объяснить итог, показать топ-3, финишное время, лучший круг, сходы и проблемные моменты. Сейчас в данных: пилотов ${summary.total_drivers ?? drivers.length ?? 0}, кругов ${summary.total_laps_with_times ?? 0}.`;
+  }
+
+  if (q.includes("топ") || q.includes("top") || q.includes("финиш")) {
+    return `${prefix}Топ финиша:\n${topDriversText(drivers.length ? drivers : top3, 10)}`;
+  }
 
   if (q.includes("кто выиг") || q.includes("побед")) {
-    const winner = summary.winner || top3[0];
-    return `${prefix}${winner?.full_name ? `Победитель гонки: ${winner.full_name}${winner.team_name ? ` (${winner.team_name})` : ""}.` : "Победитель не определён: OpenF1 не вернул session_result по этой гонке."}`;
+    const winner = summary.winner || top3[0] || drivers.find((driver: any) => Number(driver.finishing_position) === 1);
+    return `${prefix}${winner?.full_name ? `Победитель гонки: ${winner.full_name}${winner.team_name ? ` (${winner.team_name})` : ""}. Финишное время/статус: ${finishTime(winner)}.` : "Победитель не определён: API не вернул итоговую таблицу по этой гонке."}`;
+  }
+
+  if (q.includes("лучший круг") || q.includes("быстр") || q.includes("fastest")) {
+    const sorted = drivers
+      .filter((driver: any) => driver.best_lap_text || Number.isFinite(Number(driver.best_lap)))
+      .sort((a: any, b: any) => (Number(a.fastest_lap_rank) || 99) - (Number(b.fastest_lap_rank) || 99));
+    if (!sorted.length) return `${prefix}Лучшие круги недоступны: OpenF1/Jolpica не вернули fastest lap для этой гонки.`;
+    return `${prefix}Лучшие круги:\n${sorted.slice(0, 8).map((driver: any, index: number) => `${index + 1}. ${driver.full_name} — ${bestLap(driver)}${driver.fastest_lap_lap ? `, круг ${driver.fastest_lap_lap}` : ""}`).join("\n")}`;
+  }
+
+  if (q.includes("сош") || q.includes("dnf") || q.includes("не финиш")) {
+    const dnf = drivers.filter((driver: any) => driver.dnf || driver.dsq || driver.dns);
+    if (!dnf.length) return `${prefix}В данных сайта нет отмеченных сходов DNF/DNS/DSQ по этой гонке.`;
+    return `${prefix}Пилоты без нормального финиша:\n${dnf.map((driver: any) => `${driver.full_name} — ${driver.status || (driver.dsq ? "DSQ" : driver.dns ? "DNS" : "DNF")}`).join("\n")}`;
   }
 
   if (q.includes("косяч") || q.includes("ошиб") || q.includes("проблем") || q.includes("штраф")) {
-    if (!issues.length) return `${prefix}По этой гонке анализатор не нашёл проблемных моментов. Это может означать, что Race Control/результаты OpenF1 для выбранной сессии пустые.`;
-    return `${prefix}Проблемные моменты по данным API:\n${issues.slice(0, 5).map((issue: any, index: number) => `${index + 1}. ${issue.driver_name || `Пилот #${issue.driver_number}`}: ${issue.message}`).join("\n")}`;
+    if (!issues.length) return `${prefix}По этой гонке анализатор не нашёл проблемных моментов. Это не значит, что ошибок вообще не было: просто Race Control/подробная телеметрия могли быть недоступны.`;
+    return `${prefix}Проблемные моменты по данным API:\n${issues.slice(0, 7).map((issue: any, index: number) => `${index + 1}. ${issue.driver_name || `Пилот #${issue.driver_number}`}: ${issue.message}`).join("\n")}`;
   }
 
   if (q.includes("сравн") || q.includes("лучше")) {
-    const ranked = drivers
-      .filter((driver: any) => Number.isFinite(Number(driver.finishing_position)) || Number.isFinite(Number(driver.best_lap)))
-      .slice(0, 6)
-      .map((driver: any) => `${driver.full_name}: финиш ${driver.finishing_position ?? "—"}, лучший круг ${formatTime(driver.best_lap)}, пит-стопов ${driver.pit_stop_count ?? 0}`)
-      .join("\n");
-    return `${prefix}${ranked || "Сравнение недоступно: OpenF1 не вернул пилотов/круги по этой гонке."}`;
+    return `${prefix}Для общего сравнения смотри финиш, время/отставание и лучший круг:\n${topDriversText(drivers, 8)}`;
   }
 
   if (q.includes("погод")) {
     return `${prefix}${weather ? `Погода: воздух ${weather.air_temperature}°C, трасса ${weather.track_temperature}°C, влажность ${weather.humidity}%.` : "Погода недоступна: OpenF1 не вернул weather для этой сессии."}`;
   }
 
-  return `${prefix}Гонка: ${session.meeting_name || "—"}. Пилотов в данных: ${summary.total_drivers ?? drivers.length ?? 0}. Пит-стопов: ${summary.pit_stop_count ?? "—"}. Race Control событий: ${summary.race_control_event_count ?? context.race_control_events_count ?? 0}.\n\nКачество данных: session_result=${Boolean(dataQuality.has_session_result)}, laps=${Boolean(dataQuality.has_laps)}, drivers=${Boolean(dataQuality.has_drivers)}. Если всё false/0, выбери другую гонку: OpenF1 вернул только календарную сессию без телеметрии.`;
+  return `${prefix}Гонка: ${session.meeting_name || "—"}.\nПобедитель: ${summary.winner?.full_name || drivers.find((driver: any) => Number(driver.finishing_position) === 1)?.full_name || "—"}.\nПилотов в данных: ${summary.total_drivers ?? drivers.length ?? 0}.\nПит-стопов: ${summary.pit_stop_count ?? "—"}.\nRace Control событий: ${summary.race_control_event_count ?? context.race_control_events_count ?? 0}.\n\nКачество данных: session_result=${Boolean(dataQuality.has_session_result)}, laps=${Boolean(dataQuality.has_laps)}, drivers=${Boolean(dataQuality.has_drivers)}, finish_times=${Boolean(dataQuality.has_finish_times)}, fastest_laps=${Boolean(dataQuality.has_fastest_laps)}.`;
 }
 
 export default async function handler(req: any, res: any) {
@@ -144,7 +188,7 @@ export default async function handler(req: any, res: any) {
   const context = buildCompactContext(body);
   if (!context?.session && !context?.summary) return res.status(400).json({ success: false, error: "Нет контекста гонки для ИИ-чата" });
 
-  const prompt = `Ответь на вопрос пользователя по данным гонки.\n\nВопрос: ${question}\n\nКонтекст OpenF1/Jolpica:\n${safeSliceJson(context)}`;
+  const prompt = `Ответь на вопрос пользователя по выбранной гонке. Не зацикливайся на одном пилоте, отвечай по гонке в целом.\n\nВопрос: ${question}\n\nКонтекст OpenF1/Jolpica:\n${safeSliceJson(context)}`;
   const noKeyReason = getGigaAuthKey() ? "" : "не задан GIGACHAT_AUTH_KEY в .env";
   const fallback = buildFallbackAnswer(context, question, noKeyReason);
 
