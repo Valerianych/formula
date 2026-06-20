@@ -28,6 +28,7 @@ import {
 } from "recharts";
 
 type TabId = "results" | "map" | "driver" | "compare" | "issues" | "chat" | "data";
+
 type SessionInfo = {
   session_key: number;
   session_name: string;
@@ -39,6 +40,7 @@ type SessionInfo = {
   winner?: string;
   winnerTeam?: string;
 };
+
 type Driver = {
   driver_number: number;
   full_name: string;
@@ -50,10 +52,22 @@ type Driver = {
   finishing_position?: number | null;
   classified_laps?: number | null;
   gap_to_leader?: number | string | null;
+  duration?: number | string | null;
+  finish_time?: number | string | null;
+  status?: string | null;
+  best_lap?: number | null;
+  best_lap_text?: string | null;
+  fastest_lap_rank?: number | null;
+  fastest_lap_lap?: number | null;
+  pit_stop_count?: number;
+  average_lap?: number | null;
+  median_lap?: number | null;
+  average_pit_stop?: number | null;
   dnf?: boolean;
   dns?: boolean;
   dsq?: boolean;
 };
+
 type RaceData = {
   session: SessionInfo;
   summary: any;
@@ -75,7 +89,8 @@ type RaceData = {
   issues: any[];
   data_quality: Record<string, any>;
 };
-type ChatMessage = { role: "user" | "assistant"; text: string };
+
+type ChatMessage = { role: "user" | "assistant"; text: string; provider?: string };
 
 const YEARS = [2026, 2025, 2024, 2023];
 const TABS: Array<{ id: TabId; label: string; icon: any }> = [
@@ -88,10 +103,19 @@ const TABS: Array<{ id: TabId; label: string; icon: any }> = [
   { id: "data", label: "Данные API", icon: Database },
 ];
 
+const QUICK_PROMPTS = [
+  "Кто выиграл гонку?",
+  "Покажи топ-3 и финишное время",
+  "У кого лучший круг?",
+  "Кто сошёл с дистанции?",
+  "Объясни гонку простыми словами",
+];
+
 function teamColor(value?: string) {
   if (!value) return "#e10600";
   return value.startsWith("#") ? value : `#${value}`;
 }
+
 function formatTime(sec: any) {
   const value = Number(sec);
   if (!Number.isFinite(value) || value <= 0) return "—";
@@ -99,24 +123,37 @@ function formatTime(sec: any) {
   const seconds = (value % 60).toFixed(3).padStart(6, "0");
   return minutes > 0 ? `${minutes}:${seconds}` : `${seconds} c`;
 }
+
+function displayTime(value: any) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "number") return formatTime(value);
+  return String(value);
+}
+
+function bestLapDisplay(driver: any) {
+  return driver?.best_lap_text || formatTime(driver?.best_lap);
+}
+
+function finishTimeDisplay(driver: any) {
+  return displayTime(driver?.finish_time ?? driver?.duration ?? driver?.gap_to_leader ?? driver?.status);
+}
+
 function formatDate(value?: string) {
   if (!value) return "—";
   return new Date(value).toLocaleString("ru-RU", { dateStyle: "medium", timeStyle: "short" });
 }
+
 function statusLabel(driver: Driver) {
   if (driver.dsq) return "DSQ — дисквалифицирован";
   if (driver.dns) return "DNS — не стартовал";
-  if (driver.dnf) return "DNF — не финишировал";
-  return "Финишировал";
+  if (driver.dnf) return driver.status || "DNF — не финишировал";
+  return driver.status || "Финишировал";
 }
+
 function positionText(value: any) {
   return Number.isFinite(Number(value)) ? `${value}` : "—";
 }
-function shortGap(value: any) {
-  if (value === null || value === undefined || value === "") return "—";
-  if (Array.isArray(value)) return value.join(" / ");
-  return String(value);
-}
+
 async function apiJson(url: string, options?: RequestInit) {
   const response = await fetch(url, options);
   let payload: any = null;
@@ -130,6 +167,7 @@ async function apiJson(url: string, options?: RequestInit) {
   }
   return payload;
 }
+
 function EmptyBlock({ title, text }: { title: string; text: string }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 text-sm text-zinc-400">
@@ -138,6 +176,7 @@ function EmptyBlock({ title, text }: { title: string; text: string }) {
     </div>
   );
 }
+
 function StatCard({ title, value, hint }: { title: string; value: any; hint?: string }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-[#151720] p-4 shadow-xl">
@@ -243,6 +282,7 @@ export default function App() {
       setSelectedDriverNumber(firstDriver);
       setCompareA(firstDriver);
       setCompareB(secondDriver);
+      setChatMessages([]);
     } catch (err: any) {
       setError(err.message || "Не удалось загрузить данные гонки OpenF1.");
     } finally {
@@ -250,27 +290,33 @@ export default function App() {
     }
   }
 
-  async function sendChatMessage() {
-    const text = chatInput.trim();
+  async function sendChatMessage(override?: string) {
+    const text = (override || chatInput).trim();
     if (!text || !race || chatLoading) return;
     const nextMessages: ChatMessage[] = [...chatMessages, { role: "user", text }];
     setChatMessages(nextMessages);
     setChatInput("");
     setChatLoading(true);
-    const compactDriverSummaries = (race.driver_summaries || []).map((driver) => ({
+
+    const compactDriverSummaries = (race.driver_summaries || race.drivers || []).map((driver: any) => ({
       driver_number: driver.driver_number,
       full_name: driver.full_name,
       team_name: driver.team_name,
       starting_position: driver.starting_position,
       finishing_position: driver.finishing_position,
+      finish_time: driver.finish_time,
+      status: driver.status,
+      gap_to_leader: driver.gap_to_leader,
       position_delta: driver.position_delta,
       best_lap: driver.best_lap,
-      average_lap: driver.average_lap,
+      best_lap_text: driver.best_lap_text,
+      fastest_lap_rank: driver.fastest_lap_rank,
       pit_stop_count: driver.pit_stop_count,
       dnf: driver.dnf,
       dns: driver.dns,
       dsq: driver.dsq,
     }));
+
     try {
       const payload = await apiJson("/api/chat", {
         method: "POST",
@@ -288,7 +334,7 @@ export default function App() {
           },
         }),
       });
-      setChatMessages([...nextMessages, { role: "assistant", text: payload.answer || payload.analysis || "ИИ не вернул ответ." }]);
+      setChatMessages([...nextMessages, { role: "assistant", text: payload.answer || payload.analysis || "ИИ не вернул ответ.", provider: payload.provider }]);
     } catch (err: any) {
       setChatMessages([...nextMessages, { role: "assistant", text: `ИИ-чат недоступен: ${err.message || "ошибка запроса"}` }]);
     } finally {
@@ -311,7 +357,7 @@ export default function App() {
             <div className="grid h-12 w-12 place-items-center rounded-2xl bg-[#e10600] text-xl font-black italic text-white shadow-lg shadow-red-950/50">F1</div>
             <div>
               <h1 className="text-xl font-black uppercase tracking-tight text-white">F1 Race Analytics</h1>
-              <p className="text-xs text-zinc-400">OpenF1 Historical Data • GigaChat • без моков и фейковых результатов</p>
+              <p className="text-xs text-zinc-400">OpenF1 Historical Data • GigaChat • локальный кэш</p>
             </div>
           </div>
           <nav className="flex gap-2 overflow-x-auto rounded-2xl border border-white/10 bg-black/30 p-1">
@@ -348,8 +394,8 @@ export default function App() {
         </section>
 
         {error && <div className="flex items-start gap-3 rounded-2xl border border-red-500/30 bg-red-950/30 p-4 text-sm text-red-100"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-400" /><div><div className="font-bold">Не удалось загрузить данные</div><div className="text-red-200/80">{error}</div></div></div>}
-        {(loadingRace || loadingSessions) && <div className="rounded-3xl border border-white/10 bg-[#11131b] p-8 text-center text-zinc-400"><RefreshCw className="mx-auto mb-3 h-8 w-8 animate-spin text-[#e10600]" />Загрузка данных OpenF1...</div>}
-        {!loadingRace && !race && !error && <EmptyBlock title="Выбери гонку" text="После выбора сезона и гонки сайт загрузит итог, пилотов, пит-стопы, шины, карту, инциденты и данные для сравнения." />}
+        {(loadingRace || loadingSessions) && <div className="rounded-3xl border border-white/10 bg-[#11131b] p-8 text-center text-zinc-400"><RefreshCw className="mx-auto mb-3 h-8 w-8 animate-spin text-[#e10600]" />Загрузка данных...</div>}
+        {!loadingRace && !race && !error && <EmptyBlock title="Выбери гонку" text="После выбора сезона и гонки сайт загрузит итог, пилотов, финишное время, лучшие круги, карту, инциденты и сравнение." />}
 
         {race && (
           <>
@@ -358,7 +404,11 @@ export default function App() {
                 <div className="text-xs font-bold uppercase tracking-[0.25em] text-[#e10600]">{race.session.session_name}</div>
                 <h2 className="mt-2 text-3xl font-black text-white">{race.session.meeting_name}</h2>
                 <p className="mt-2 text-sm text-zinc-400">{race.session.location}, {race.session.country_name} • {formatDate(race.session.date_start)}</p>
-                <div className="mt-4 flex flex-wrap gap-2 text-xs"><span className="rounded-full bg-emerald-500/10 px-3 py-1 font-bold text-emerald-300">OpenF1 API</span><span className="rounded-full bg-blue-500/10 px-3 py-1 font-bold text-blue-300">без моков</span><span className="rounded-full bg-white/5 px-3 py-1 font-bold text-zinc-300">{race.data_quality?.has_location ? "карта доступна" : "карта может быть недоступна"}</span></div>
+                <div className="mt-4 flex flex-wrap gap-2 text-xs">
+                  <span className="rounded-full bg-emerald-500/10 px-3 py-1 font-bold text-emerald-300">{race.data_quality?.source || "OpenF1 API"}</span>
+                  <span className="rounded-full bg-blue-500/10 px-3 py-1 font-bold text-blue-300">без моков</span>
+                  <span className="rounded-full bg-white/5 px-3 py-1 font-bold text-zinc-300">{race.data_quality?.has_laps ? "круги доступны" : "только итог/без кругов"}</span>
+                </div>
               </div>
               <StatCard title="Победитель" value={winner?.full_name || race.session.winner || "—"} hint={winner?.team_name || race.session.winnerTeam} />
               <StatCard title="Пилотов" value={race.summary?.total_drivers || race.drivers.length} hint={`DNF: ${race.summary?.dnf_count || 0}, DSQ: ${race.summary?.dsq_count || 0}`} />
@@ -381,8 +431,64 @@ export default function App() {
 function ResultsTab({ race, top3, issueCountByDriver, setSelectedDriverNumber, setActiveTab }: any) {
   return (
     <section className="grid gap-6">
-      <div className="grid gap-4 md:grid-cols-3">{top3.map((driver: Driver, index: number) => <div key={driver.driver_number} className="rounded-3xl border border-white/10 bg-[#151720] p-5 shadow-xl"><div className="text-xs font-black uppercase tracking-[0.25em] text-[#e10600]">{index + 1} место</div><div className="mt-3 flex items-center gap-4"><img src={driver.headshot_url || ""} alt="" className="h-16 w-16 rounded-2xl bg-black/40 object-cover" /><div><div className="text-xl font-black text-white">{driver.full_name}</div><div className="text-sm" style={{ color: teamColor(driver.team_colour) }}>{driver.team_name}</div></div></div></div>)}</div>
-      <div className="overflow-hidden rounded-3xl border border-white/10 bg-[#11131b]"><div className="border-b border-white/10 p-5"><h3 className="text-xl font-black text-white">Итог гонки</h3><p className="mt-1 text-sm text-zinc-400">Позиции берутся из OpenF1 session_result.</p></div><div className="overflow-x-auto"><table className="w-full min-w-[900px] text-left text-sm"><thead className="bg-black/30 text-xs uppercase tracking-widest text-zinc-500"><tr><th className="px-4 py-3">Место</th><th className="px-4 py-3">Пилот</th><th className="px-4 py-3">Команда</th><th className="px-4 py-3">Старт</th><th className="px-4 py-3">Круги</th><th className="px-4 py-3">Отставание</th><th className="px-4 py-3">Статус</th><th className="px-4 py-3">Проблемы</th></tr></thead><tbody>{race.drivers.map((driver: Driver) => <tr key={driver.driver_number} className="border-t border-white/5 hover:bg-white/[0.03]"><td className="px-4 py-3 font-black text-white">{positionText(driver.finishing_position)}</td><td className="px-4 py-3"><button onClick={() => { setSelectedDriverNumber(driver.driver_number); setActiveTab("driver"); }} className="flex items-center gap-3 text-left hover:text-white"><img src={driver.headshot_url || ""} alt="" className="h-10 w-10 rounded-xl bg-black/40 object-cover" /><span><span className="block font-bold text-white">{driver.full_name}</span><span className="text-xs text-zinc-500">#{driver.driver_number} • {driver.name_acronym}</span></span></button></td><td className="px-4 py-3 font-bold" style={{ color: teamColor(driver.team_colour) }}>{driver.team_name}</td><td className="px-4 py-3">{positionText(driver.starting_position)}</td><td className="px-4 py-3">{positionText(driver.classified_laps)}</td><td className="px-4 py-3">{shortGap(driver.gap_to_leader)}</td><td className="px-4 py-3 text-xs text-zinc-400">{statusLabel(driver)}</td><td className="px-4 py-3">{issueCountByDriver.get(driver.driver_number) || 0}</td></tr>)}</tbody></table></div></div>
+      <div className="grid gap-4 md:grid-cols-3">
+        {top3.map((driver: Driver, index: number) => (
+          <div key={driver.driver_number} className="rounded-3xl border border-white/10 bg-[#151720] p-5 shadow-xl">
+            <div className="text-xs font-black uppercase tracking-[0.25em] text-[#e10600]">{index + 1} место</div>
+            <div className="mt-3 flex items-center gap-4">
+              <img src={driver.headshot_url || ""} alt="" className="h-16 w-16 rounded-2xl bg-black/40 object-cover" />
+              <div>
+                <div className="text-xl font-black text-white">{driver.full_name}</div>
+                <div className="text-sm" style={{ color: teamColor(driver.team_colour) }}>{driver.team_name}</div>
+                <div className="mt-1 text-xs text-zinc-500">Финиш: {finishTimeDisplay(driver)} • Лучший круг: {bestLapDisplay(driver)}</div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="overflow-hidden rounded-3xl border border-white/10 bg-[#11131b]">
+        <div className="border-b border-white/10 p-5">
+          <h3 className="text-xl font-black text-white">Итог гонки</h3>
+          <p className="mt-1 text-sm text-zinc-400">Финишное время и лучший круг берутся из OpenF1, а если их нет — дополняются историческими результатами Jolpica.</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1100px] text-left text-sm">
+            <thead className="bg-black/30 text-xs uppercase tracking-widest text-zinc-500">
+              <tr>
+                <th className="px-4 py-3">Место</th>
+                <th className="px-4 py-3">Пилот</th>
+                <th className="px-4 py-3">Команда</th>
+                <th className="px-4 py-3">Старт</th>
+                <th className="px-4 py-3">Финиш / отставание</th>
+                <th className="px-4 py-3">Лучший круг</th>
+                <th className="px-4 py-3">Круги</th>
+                <th className="px-4 py-3">Статус</th>
+                <th className="px-4 py-3">Проблемы</th>
+              </tr>
+            </thead>
+            <tbody>
+              {race.drivers.map((driver: Driver) => (
+                <tr key={driver.driver_number} className="border-t border-white/5 hover:bg-white/[0.03]">
+                  <td className="px-4 py-3 font-black text-white">{positionText(driver.finishing_position)}</td>
+                  <td className="px-4 py-3">
+                    <button onClick={() => { setSelectedDriverNumber(driver.driver_number); setActiveTab("driver"); }} className="flex items-center gap-3 text-left hover:text-white">
+                      <img src={driver.headshot_url || ""} alt="" className="h-10 w-10 rounded-xl bg-black/40 object-cover" />
+                      <span><span className="block font-bold text-white">{driver.full_name}</span><span className="text-xs text-zinc-500">#{driver.driver_number} • {driver.name_acronym}</span></span>
+                    </button>
+                  </td>
+                  <td className="px-4 py-3 font-bold" style={{ color: teamColor(driver.team_colour) }}>{driver.team_name}</td>
+                  <td className="px-4 py-3">{positionText(driver.starting_position)}</td>
+                  <td className="px-4 py-3 font-bold text-white">{finishTimeDisplay(driver)}</td>
+                  <td className="px-4 py-3">{bestLapDisplay(driver)}</td>
+                  <td className="px-4 py-3">{positionText(driver.classified_laps)}</td>
+                  <td className="px-4 py-3 text-xs text-zinc-400">{statusLabel(driver)}</td>
+                  <td className="px-4 py-3">{issueCountByDriver.get(driver.driver_number) || 0}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </section>
   );
 }
@@ -392,7 +498,7 @@ function MapTab({ race }: any) {
 }
 
 function DriverTab({ race, selectedDriverNumber, selectedDriver, selectedDriverLaps, setSelectedDriverNumber }: any) {
-  return <section className="grid gap-6 lg:grid-cols-[320px_1fr]"><div className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><label className="mb-2 block text-xs font-bold uppercase tracking-widest text-zinc-500">Пилот</label><select value={selectedDriverNumber} onChange={(event) => setSelectedDriverNumber(Number(event.target.value))} className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm font-bold text-white outline-none focus:border-[#e10600]">{race.drivers.map((driver: Driver) => <option key={driver.driver_number} value={driver.driver_number}>{driver.full_name}</option>)}</select>{selectedDriver && <div className="mt-5"><img src={selectedDriver.headshot_url || ""} alt="" className="h-40 w-full rounded-3xl bg-black/40 object-contain" /><h3 className="mt-4 text-2xl font-black text-white">{selectedDriver.full_name}</h3><p className="font-bold" style={{ color: teamColor(selectedDriver.team_colour) }}>{selectedDriver.team_name}</p><div className="mt-4 grid grid-cols-2 gap-3 text-sm"><StatCard title="Финиш" value={positionText(selectedDriver.finishing_position)} /><StatCard title="Старт" value={positionText(selectedDriver.starting_position)} /><StatCard title="Лучший круг" value={formatTime(selectedDriver.best_lap)} /><StatCard title="Пит-стопы" value={selectedDriver.pit_stop_count ?? 0} /></div></div>}</div>{selectedDriver ? <div className="grid gap-6"><div className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><h3 className="flex items-center gap-2 text-xl font-black text-white"><Gauge className="h-5 w-5 text-[#e10600]" /> Круги пилота</h3>{selectedDriverLaps.length ? <div className="mt-4 h-80"><ResponsiveContainer width="100%" height="100%"><LineChart data={selectedDriverLaps}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" /><XAxis dataKey="lap" stroke="#a1a1aa" /><YAxis stroke="#a1a1aa" domain={["dataMin - 1", "dataMax + 1"]} /><Tooltip contentStyle={{ background: "#11131b", border: "1px solid #333", borderRadius: 12 }} /><Line type="monotone" dataKey="lap_time" stroke={teamColor(selectedDriver.team_colour)} dot={false} strokeWidth={2} /></LineChart></ResponsiveContainer></div> : <EmptyBlock title="Круги недоступны" text="OpenF1 не вернул lap_duration по этому пилоту." />}</div><div className="grid gap-6 lg:grid-cols-2"><SimpleList title="Пит-стопы" icon={<Wrench className="h-5 w-5 text-[#e10600]" />} items={selectedDriver.pit_stops || []} empty="OpenF1 не вернул pit-данные по этому пилоту." render={(pit: any, index: number) => <div key={index} className="rounded-2xl bg-white/[0.03] p-3 text-sm"><div className="font-bold text-white">Круг {pit.lap_number ?? "—"}</div><div className="text-zinc-400">Остановка: {formatTime(pit.stop_duration)} • пит-лейн: {formatTime(pit.lane_duration)}</div></div>} /><SimpleList title="Шины" icon={<Activity className="h-5 w-5 text-[#e10600]" />} items={selectedDriver.stints || []} empty="OpenF1 не вернул stints по этому пилоту." render={(stint: any) => <div key={stint.stint_number} className="rounded-2xl bg-white/[0.03] p-3 text-sm"><div className="font-bold text-white">{stint.compound}</div><div className="text-zinc-400">Круги {stint.lap_start ?? "—"}–{stint.lap_end ?? "—"}, возраст шин: {stint.tyre_age_at_start ?? "—"}</div></div>} /></div></div> : <EmptyBlock title="Пилот не выбран" text="Выберите пилота из списка." />}</section>;
+  return <section className="grid gap-6 lg:grid-cols-[320px_1fr]"><div className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><label className="mb-2 block text-xs font-bold uppercase tracking-widest text-zinc-500">Пилот</label><select value={selectedDriverNumber} onChange={(event) => setSelectedDriverNumber(Number(event.target.value))} className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm font-bold text-white outline-none focus:border-[#e10600]">{race.drivers.map((driver: Driver) => <option key={driver.driver_number} value={driver.driver_number}>{driver.full_name}</option>)}</select>{selectedDriver && <div className="mt-5"><img src={selectedDriver.headshot_url || ""} alt="" className="h-40 w-full rounded-3xl bg-black/40 object-contain" /><h3 className="mt-4 text-2xl font-black text-white">{selectedDriver.full_name}</h3><p className="font-bold" style={{ color: teamColor(selectedDriver.team_colour) }}>{selectedDriver.team_name}</p><div className="mt-4 grid grid-cols-2 gap-3 text-sm"><StatCard title="Финиш" value={positionText(selectedDriver.finishing_position)} /><StatCard title="Старт" value={positionText(selectedDriver.starting_position)} /><StatCard title="Время финиша" value={finishTimeDisplay(selectedDriver)} /><StatCard title="Лучший круг" value={bestLapDisplay(selectedDriver)} /><StatCard title="Круги" value={selectedDriver.classified_laps ?? "—"} /><StatCard title="Пит-стопы" value={selectedDriver.pit_stop_count ?? 0} /></div></div>}</div>{selectedDriver ? <div className="grid gap-6"><div className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><h3 className="flex items-center gap-2 text-xl font-black text-white"><Gauge className="h-5 w-5 text-[#e10600]" /> Круги пилота</h3>{selectedDriverLaps.length ? <div className="mt-4 h-80"><ResponsiveContainer width="100%" height="100%"><LineChart data={selectedDriverLaps}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" /><XAxis dataKey="lap" stroke="#a1a1aa" /><YAxis stroke="#a1a1aa" domain={["dataMin - 1", "dataMax + 1"]} /><Tooltip contentStyle={{ background: "#11131b", border: "1px solid #333", borderRadius: 12 }} /><Line type="monotone" dataKey="lap_time" stroke={teamColor(selectedDriver.team_colour)} dot={false} strokeWidth={2} /></LineChart></ResponsiveContainer></div> : <EmptyBlock title="Круги недоступны" text="OpenF1 не вернул lap_duration по этому пилоту. Итоговые данные и лучший круг могут быть взяты из исторического fallback." />}</div><div className="grid gap-6 lg:grid-cols-2"><SimpleList title="Пит-стопы" icon={<Wrench className="h-5 w-5 text-[#e10600]" />} items={selectedDriver.pit_stops || []} empty="OpenF1 не вернул pit-данные по этому пилоту." render={(pit: any, index: number) => <div key={index} className="rounded-2xl bg-white/[0.03] p-3 text-sm"><div className="font-bold text-white">Круг {pit.lap_number ?? "—"}</div><div className="text-zinc-400">Остановка: {displayTime(pit.stop_duration)} • пит-лейн: {displayTime(pit.lane_duration)}</div></div>} /><SimpleList title="Шины" icon={<Activity className="h-5 w-5 text-[#e10600]" />} items={selectedDriver.stints || []} empty="OpenF1 не вернул stints по этому пилоту." render={(stint: any) => <div key={stint.stint_number} className="rounded-2xl bg-white/[0.03] p-3 text-sm"><div className="font-bold text-white">{stint.compound}</div><div className="text-zinc-400">Круги {stint.lap_start ?? "—"}–{stint.lap_end ?? "—"}, возраст шин: {stint.tyre_age_at_start ?? "—"}</div></div>} /></div></div> : <EmptyBlock title="Пилот не выбран" text="Выберите пилота из списка." />}</section>;
 }
 
 function SimpleList({ title, icon, items, empty, render }: any) {
@@ -400,7 +506,7 @@ function SimpleList({ title, icon, items, empty, render }: any) {
 }
 
 function CompareTab({ race, compareA, compareB, compareDriverA, compareDriverB, compareChart, issueCountByDriver, setCompareA, setCompareB }: any) {
-  return <section className="grid gap-6"><div className="grid gap-4 md:grid-cols-2"><select value={compareA} onChange={(event) => setCompareA(Number(event.target.value))} className="rounded-2xl border border-white/10 bg-[#11131b] px-4 py-3 text-sm font-bold text-white outline-none focus:border-[#e10600]">{race.drivers.map((driver: Driver) => <option key={driver.driver_number} value={driver.driver_number}>{driver.full_name}</option>)}</select><select value={compareB} onChange={(event) => setCompareB(Number(event.target.value))} className="rounded-2xl border border-white/10 bg-[#11131b] px-4 py-3 text-sm font-bold text-white outline-none focus:border-[#e10600]">{race.drivers.map((driver: Driver) => <option key={driver.driver_number} value={driver.driver_number}>{driver.full_name}</option>)}</select></div>{compareDriverA && compareDriverB ? <><div className="overflow-hidden rounded-3xl border border-white/10 bg-[#11131b]"><table className="w-full min-w-[720px] text-left text-sm"><thead className="bg-black/30 text-xs uppercase tracking-widest text-zinc-500"><tr><th className="px-4 py-3">Показатель</th><th className="px-4 py-3">{compareDriverA.full_name}</th><th className="px-4 py-3">{compareDriverB.full_name}</th></tr></thead><tbody>{[["Финиш", positionText(compareDriverA.finishing_position), positionText(compareDriverB.finishing_position)], ["Старт", positionText(compareDriverA.starting_position), positionText(compareDriverB.starting_position)], ["Изменение позиции", compareDriverA.position_delta ?? "—", compareDriverB.position_delta ?? "—"], ["Лучший круг", formatTime(compareDriverA.best_lap), formatTime(compareDriverB.best_lap)], ["Средний круг", formatTime(compareDriverA.average_lap), formatTime(compareDriverB.average_lap)], ["Медианный круг", formatTime(compareDriverA.median_lap), formatTime(compareDriverB.median_lap)], ["Пит-стопы", compareDriverA.pit_stop_count ?? 0, compareDriverB.pit_stop_count ?? 0], ["Средний пит-стоп", formatTime(compareDriverA.average_pit_stop), formatTime(compareDriverB.average_pit_stop)], ["Проблемные моменты", issueCountByDriver.get(compareDriverA.driver_number) || 0, issueCountByDriver.get(compareDriverB.driver_number) || 0]].map((row) => <tr key={String(row[0])} className="border-t border-white/5"><td className="px-4 py-3 font-bold text-zinc-300">{row[0]}</td><td className="px-4 py-3 text-white">{row[1]}</td><td className="px-4 py-3 text-white">{row[2]}</td></tr>)}</tbody></table></div>{compareChart.length ? <div className="h-96 rounded-3xl border border-white/10 bg-[#11131b] p-5"><ResponsiveContainer width="100%" height="100%"><LineChart data={compareChart}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" /><XAxis dataKey="lap" stroke="#a1a1aa" /><YAxis stroke="#a1a1aa" domain={["dataMin - 1", "dataMax + 1"]} /><Tooltip contentStyle={{ background: "#11131b", border: "1px solid #333", borderRadius: 12 }} /><Legend /><Line type="monotone" dataKey={compareDriverA.name_acronym || "A"} stroke={teamColor(compareDriverA.team_colour)} dot={false} strokeWidth={2} /><Line type="monotone" dataKey={compareDriverB.name_acronym || "B"} stroke={teamColor(compareDriverB.team_colour)} dot={false} strokeWidth={2} /></LineChart></ResponsiveContainer></div> : <EmptyBlock title="График недоступен" text="OpenF1 не вернул круги для сравнения этих пилотов." />}</> : <EmptyBlock title="Выберите двух пилотов" text="После выбора сайт сравнит позиции, темп, пит-стопы и проблемные моменты." />}</section>;
+  return <section className="grid gap-6"><div className="grid gap-4 md:grid-cols-2"><select value={compareA} onChange={(event) => setCompareA(Number(event.target.value))} className="rounded-2xl border border-white/10 bg-[#11131b] px-4 py-3 text-sm font-bold text-white outline-none focus:border-[#e10600]">{race.drivers.map((driver: Driver) => <option key={driver.driver_number} value={driver.driver_number}>{driver.full_name}</option>)}</select><select value={compareB} onChange={(event) => setCompareB(Number(event.target.value))} className="rounded-2xl border border-white/10 bg-[#11131b] px-4 py-3 text-sm font-bold text-white outline-none focus:border-[#e10600]">{race.drivers.map((driver: Driver) => <option key={driver.driver_number} value={driver.driver_number}>{driver.full_name}</option>)}</select></div>{compareDriverA && compareDriverB ? <><div className="overflow-hidden rounded-3xl border border-white/10 bg-[#11131b]"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-black/30 text-xs uppercase tracking-widest text-zinc-500"><tr><th className="px-4 py-3">Показатель</th><th className="px-4 py-3">{compareDriverA.full_name}</th><th className="px-4 py-3">{compareDriverB.full_name}</th></tr></thead><tbody>{[["Финиш", positionText(compareDriverA.finishing_position), positionText(compareDriverB.finishing_position)], ["Время финиша", finishTimeDisplay(compareDriverA), finishTimeDisplay(compareDriverB)], ["Старт", positionText(compareDriverA.starting_position), positionText(compareDriverB.starting_position)], ["Изменение позиции", compareDriverA.position_delta ?? "—", compareDriverB.position_delta ?? "—"], ["Лучший круг", bestLapDisplay(compareDriverA), bestLapDisplay(compareDriverB)], ["Средний круг", displayTime(compareDriverA.average_lap), displayTime(compareDriverB.average_lap)], ["Медианный круг", displayTime(compareDriverA.median_lap), displayTime(compareDriverB.median_lap)], ["Пит-стопы", compareDriverA.pit_stop_count ?? 0, compareDriverB.pit_stop_count ?? 0], ["Средний пит-стоп", displayTime(compareDriverA.average_pit_stop), displayTime(compareDriverB.average_pit_stop)], ["Проблемные моменты", issueCountByDriver.get(compareDriverA.driver_number) || 0, issueCountByDriver.get(compareDriverB.driver_number) || 0]].map((row) => <tr key={String(row[0])} className="border-t border-white/5"><td className="px-4 py-3 font-bold text-zinc-300">{row[0]}</td><td className="px-4 py-3 text-white">{row[1]}</td><td className="px-4 py-3 text-white">{row[2]}</td></tr>)}</tbody></table></div>{compareChart.length ? <div className="h-96 rounded-3xl border border-white/10 bg-[#11131b] p-5"><ResponsiveContainer width="100%" height="100%"><LineChart data={compareChart}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" /><XAxis dataKey="lap" stroke="#a1a1aa" /><YAxis stroke="#a1a1aa" domain={["dataMin - 1", "dataMax + 1"]} /><Tooltip contentStyle={{ background: "#11131b", border: "1px solid #333", borderRadius: 12 }} /><Legend /><Line type="monotone" dataKey={compareDriverA.name_acronym || "A"} stroke={teamColor(compareDriverA.team_colour)} dot={false} strokeWidth={2} /><Line type="monotone" dataKey={compareDriverB.name_acronym || "B"} stroke={teamColor(compareDriverB.team_colour)} dot={false} strokeWidth={2} /></LineChart></ResponsiveContainer></div> : <EmptyBlock title="График недоступен" text="OpenF1 не вернул круги для сравнения этих пилотов. Таблица выше всё равно сравнивает исторический итог гонки." />}</> : <EmptyBlock title="Выберите двух пилотов" text="После выбора сайт сравнит позиции, время финиша, лучший круг и проблемные моменты." />}</section>;
 }
 
 function IssuesTab({ race }: any) {
@@ -408,9 +514,9 @@ function IssuesTab({ race }: any) {
 }
 
 function ChatTab({ chatInput, chatMessages, chatLoading, setChatInput, sendChatMessage }: any) {
-  return <section className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><h3 className="flex items-center gap-2 text-xl font-black text-white"><MessageSquare className="h-5 w-5 text-[#e10600]" /> GigaChat по гонке</h3><p className="mt-1 text-sm text-zinc-400">Можно спросить: “кто выиграл?”, “кто потерял позиции?”, “сравни двух пилотов”, “что значит DNF?”.</p><div className="mt-5 flex h-[420px] flex-col gap-3 overflow-y-auto rounded-2xl border border-white/10 bg-black/30 p-4">{chatMessages.length === 0 && <div className="text-sm text-zinc-500">Пока сообщений нет.</div>}{chatMessages.map((message: ChatMessage, index: number) => <div key={index} className={`max-w-[85%] rounded-2xl p-3 text-sm ${message.role === "user" ? "ml-auto bg-[#e10600] text-white" : "bg-white/[0.06] text-zinc-200"}`}>{message.text}</div>)}{chatLoading && <div className="max-w-[85%] rounded-2xl bg-white/[0.06] p-3 text-sm text-zinc-400">GigaChat думает...</div>}</div><div className="mt-4 flex gap-3"><input value={chatInput} onChange={(event) => setChatInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && sendChatMessage()} className="flex-1 rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none focus:border-[#e10600]" placeholder="Спроси что-нибудь про выбранную гонку..." /><button onClick={sendChatMessage} disabled={!chatInput.trim() || chatLoading} className="rounded-2xl bg-[#e10600] px-5 text-xs font-black uppercase tracking-widest text-white disabled:opacity-50">Отправить</button></div></section>;
+  return <section className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><h3 className="flex items-center gap-2 text-xl font-black text-white"><MessageSquare className="h-5 w-5 text-[#e10600]" /> GigaChat по гонке</h3><p className="mt-1 text-sm text-zinc-400">Чат отвечает по выбранной гонке в целом: победитель, топ-3, финишное время, лучший круг, сходы и объяснения терминов.</p><div className="mt-4 flex flex-wrap gap-2">{QUICK_PROMPTS.map((prompt) => <button key={prompt} onClick={() => sendChatMessage(prompt)} disabled={chatLoading} className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-bold text-zinc-300 hover:bg-white/[0.08] disabled:opacity-50">{prompt}</button>)}</div><div className="mt-5 flex h-[420px] flex-col gap-3 overflow-y-auto rounded-2xl border border-white/10 bg-black/30 p-4">{chatMessages.length === 0 && <div className="text-sm text-zinc-500">Задай вопрос по гонке или нажми одну из быстрых кнопок выше.</div>}{chatMessages.map((message: ChatMessage, index: number) => <div key={index} className={`max-w-[85%] whitespace-pre-line rounded-2xl p-3 text-sm ${message.role === "user" ? "ml-auto bg-[#e10600] text-white" : "bg-white/[0.06] text-zinc-200"}`}>{message.text}{message.provider && <div className="mt-2 text-[10px] uppercase tracking-widest text-zinc-500">{message.provider}</div>}</div>)}{chatLoading && <div className="max-w-[85%] rounded-2xl bg-white/[0.06] p-3 text-sm text-zinc-400">ИИ думает...</div>}</div><div className="mt-4 flex gap-3"><input value={chatInput} onChange={(event) => setChatInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && sendChatMessage()} className="flex-1 rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none focus:border-[#e10600]" placeholder="Спроси про гонку, а не только про одного пилота..." /><button onClick={() => sendChatMessage()} disabled={!chatInput.trim() || chatLoading} className="rounded-2xl bg-[#e10600] px-5 text-xs font-black uppercase tracking-widest text-white disabled:opacity-50">Отправить</button></div></section>;
 }
 
 function DataTab({ race }: any) {
-  return <section className="grid gap-6 lg:grid-cols-2"><div className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><h3 className="flex items-center gap-2 text-xl font-black text-white"><Database className="h-5 w-5 text-[#e10600]" /> Доступность данных</h3><div className="mt-4 grid gap-2 text-sm">{Object.entries(race.data_quality || {}).map(([key, value]) => <div key={key} className="flex items-center justify-between rounded-2xl bg-white/[0.03] px-3 py-2"><span className="text-zinc-400">{key}</span><span className="font-bold text-white">{String(value)}</span></div>)}</div></div><div className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><h3 className="flex items-center gap-2 text-xl font-black text-white"><CloudSun className="h-5 w-5 text-[#e10600]" /> Погода</h3>{race.weather?.length ? <div className="mt-4 h-80"><ResponsiveContainer width="100%" height="100%"><LineChart data={race.weather.map((item: any) => ({ time: new Date(item.date).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }), air: item.air_temperature, track: item.track_temperature, humidity: item.humidity }))}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" /><XAxis dataKey="time" stroke="#a1a1aa" /><YAxis stroke="#a1a1aa" /><Tooltip contentStyle={{ background: "#11131b", border: "1px solid #333", borderRadius: 12 }} /><Legend /><Line type="monotone" dataKey="air" stroke="#60a5fa" dot={false} /><Line type="monotone" dataKey="track" stroke="#f97316" dot={false} /><Line type="monotone" dataKey="humidity" stroke="#22c55e" dot={false} /></LineChart></ResponsiveContainer></div> : <EmptyBlock title="Погода недоступна" text="OpenF1 не вернул weather для этой сессии." />}</div></section>;
+  return <section className="grid gap-6 lg:grid-cols-2"><div className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><h3 className="flex items-center gap-2 text-xl font-black text-white"><Database className="h-5 w-5 text-[#e10600]" /> Доступность данных</h3><div className="mt-4 grid gap-2 text-sm">{Object.entries(race.data_quality || {}).map(([key, value]) => <div key={key} className="flex items-center justify-between gap-4 rounded-2xl bg-white/[0.03] px-3 py-2"><span className="text-zinc-400">{key}</span><span className="text-right font-bold text-white">{String(value)}</span></div>)}</div></div><div className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><h3 className="flex items-center gap-2 text-xl font-black text-white"><CloudSun className="h-5 w-5 text-[#e10600]" /> Погода</h3>{race.weather?.length ? <div className="mt-4 h-80"><ResponsiveContainer width="100%" height="100%"><LineChart data={race.weather.map((item: any) => ({ time: new Date(item.date).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }), air: item.air_temperature, track: item.track_temperature, humidity: item.humidity }))}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" /><XAxis dataKey="time" stroke="#a1a1aa" /><YAxis stroke="#a1a1aa" /><Tooltip contentStyle={{ background: "#11131b", border: "1px solid #333", borderRadius: 12 }} /><Legend /><Line type="monotone" dataKey="air" stroke="#60a5fa" dot={false} /><Line type="monotone" dataKey="track" stroke="#f97316" dot={false} /><Line type="monotone" dataKey="humidity" stroke="#22c55e" dot={false} /></LineChart></ResponsiveContainer></div> : <EmptyBlock title="Погода недоступна" text="OpenF1 не вернул weather для этой сессии." />}</div></section>;
 }
