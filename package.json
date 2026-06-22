@@ -25,9 +25,13 @@
     "cache:maps:2024": "python scripts/cache_maps.py 2024",
     "cache:maps:2025": "python scripts/cache_maps.py 2025",
     "cache:maps:2026": "python scripts/cache_maps.py 2026",
-    "cache:all:2024": "npm run cache:2024 && npm run cache:fastf1:2024",
-    "cache:all:2025": "npm run cache:2025 && npm run cache:fastf1:2025",
-    "cache:all:2026": "npm run cache:current:2026"
+    "cache:repair": "tsx scripts/repair_cache_display.ts",
+    "cache:repair:2024": "tsx scripts/repair_cache_display.ts 2024",
+    "cache:repair:2025": "tsx scripts/repair_cache_display.ts 2025",
+    "cache:repair:2026": "tsx scripts/repair_cache_display.ts 2026",
+    "cache:all:2024": "npm run cache:2024 && npm run cache:fastf1:2024 && npm run cache:repair:2024",
+    "cache:all:2025": "npm run cache:2025 && npm run cache:fastf1:2025 && npm run cache:repair:2025",
+    "cache:all:2026": "npm run cache:current:2026 && npm run cache:repair:2026"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
