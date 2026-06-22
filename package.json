@@ -19,6 +19,10 @@
     "cache:results:2024": "tsx scripts/cache_results.ts 2024",
     "cache:results:2025": "tsx scripts/cache_results.ts 2025",
     "cache:results:2026": "tsx scripts/cache_results.ts 2026",
+    "cache:site": "tsx scripts/cache_site_data.ts",
+    "cache:site:2024": "tsx scripts/cache_site_data.ts 2024 && npm run cache:repair:2024",
+    "cache:site:2025": "tsx scripts/cache_site_data.ts 2025 && npm run cache:repair:2025",
+    "cache:site:2026": "tsx scripts/cache_site_data.ts 2026 && npm run cache:repair:2026",
     "cache:fastf1": "python scripts/fastf1_cache.py",
     "cache:fastf1:2024": "python scripts/fastf1_cache.py 2024",
     "cache:fastf1:2024:telemetry": "python scripts/fastf1_cache.py 2024 --telemetry",
@@ -33,9 +37,9 @@
     "cache:repair:2024": "tsx scripts/repair_cache_display.ts 2024",
     "cache:repair:2025": "tsx scripts/repair_cache_display.ts 2025",
     "cache:repair:2026": "tsx scripts/repair_cache_display.ts 2026",
-    "cache:all:2024": "npm run cache:2024 && npm run cache:results:2024 && npm run cache:fastf1:2024 && npm run cache:repair:2024",
-    "cache:all:2025": "npm run cache:2025 && npm run cache:results:2025 && npm run cache:fastf1:2025 && npm run cache:repair:2025",
-    "cache:all:2026": "npm run cache:current:2026 && npm run cache:results:2026 && npm run cache:repair:2026"
+    "cache:all:2024": "npm run cache:2024 && npm run cache:site:2024",
+    "cache:all:2025": "npm run cache:2025 && npm run cache:site:2025",
+    "cache:all:2026": "npm run cache:current:2026 && npm run cache:site:2026"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
