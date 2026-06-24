@@ -1,4 +1,4 @@
-const JOLPICA_BASE = "https://api.jolpica.org/ergast/f1";
+const JOLPICA_BASE = "https://api.jolpi.ca/ergast/f1";
 
 function parseYear(raw: any, fallback = 2025) {
   const year = Number(raw || fallback);

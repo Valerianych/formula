@@ -1,9 +1,4 @@
-const OPENF1_BASE = "https://api.openf1.org/v1";
-
-function parseYear(raw: any, fallback = 2025) {
-  const year = Number(raw || fallback);
-  return Number.isFinite(year) ? year : fallback;
-}
+import { getOpenF1Sessions, parseYear } from "./_f1Api.ts";
 
 export default async function handler(req: any, res: any) {
   res.setHeader("Cache-Control", "no-store, no-cache, max-age=0, must-revalidate");
@@ -11,31 +6,7 @@ export default async function handler(req: any, res: any) {
   const year = parseYear(req.query?.year);
 
   try {
-    const response = await fetch(`${OPENF1_BASE}/sessions?year=${year}`);
-
-    if (!response.ok) {
-      throw new Error(`OpenF1 API returned HTTP ${response.status}`);
-    }
-
-    const data = await response.json();
-    const now = new Date();
-    const sourceSessions = Array.isArray(data) ? data : [];
-
-    const sessions = sourceSessions
-      .filter((session: any) => session.session_name === "Race")
-      .filter((session: any) => new Date(session.date_start) <= now)
-      .map((session: any) => ({
-        session_key: session.session_key,
-        session_name: session.session_name,
-        session_type: session.session_type || session.session_name,
-        meeting_key: session.meeting_key,
-        meeting_name: session.meeting_name || `${session.location} Grand Prix`,
-        location: session.location,
-        country_name: session.country_name,
-        year: session.year,
-        date_start: session.date_start,
-      }))
-      .sort((a: any, b: any) => new Date(b.date_start).getTime() - new Date(a.date_start).getTime());
+    const sessions = await getOpenF1Sessions(year);
 
     return res.status(200).json({
       success: true,
@@ -43,17 +14,17 @@ export default async function handler(req: any, res: any) {
       sessions,
       isDemo: false,
       source: "OpenF1 API",
-      note: sessions.length ? "OpenF1 data loaded." : "OpenF1 returned no completed race sessions.",
+      note: sessions.length ? "OpenF1 race sessions loaded." : "OpenF1 не вернул завершённые Race-сессии за этот год.",
     });
   } catch (error: any) {
-    return res.status(200).json({
-      success: true,
+    return res.status(502).json({
+      success: false,
       year,
       sessions: [],
       isDemo: false,
       source: "OpenF1 API",
       error: error?.message || "OpenF1 API unavailable",
-      note: "OpenF1 data did not load.",
+      note: "Фейковые гонки не использовались.",
     });
   }
 }

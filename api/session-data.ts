@@ -1,4 +1,4 @@
-import { getJolpicaRaceResults, getOpenF1SessionData } from "./_f1Api";
+import { getJolpicaRaceResults, getOpenF1RaceDashboard } from "./_f1Api.ts";
 
 function norm(value: any) {
   return String(value || "")
@@ -35,52 +35,47 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const data = await getOpenF1SessionData(sessionKey);
+    const data = await getOpenF1RaceDashboard(sessionKey);
 
-    if (data?.session) {
-      const races = await getJolpicaRaceResults(data.session.year).catch(() => []);
-      const result = findResult(data.session, races);
+    if (!data?.session) {
+      return res.status(404).json({
+        success: false,
+        isDemo: false,
+        source: "OpenF1 API",
+        data: null,
+        error: "OpenF1 не вернул данные по этой сессии",
+        note: "Фейковые данные отключены.",
+      });
+    }
 
-      if (result) {
-        const winnerLine = `Победитель гонки: ${result.winner} (${result.winnerTeam})`;
+    const races = await getJolpicaRaceResults(data.session.year).catch(() => []);
+    const result = findResult(data.session, races);
 
-        data.session = {
-          ...data.session,
-          meeting_name: `${result.raceName} - ${winnerLine}`,
-          winner: result.winner,
-          winnerTeam: result.winnerTeam,
-          winnerTime: result.time,
-          winnerLine,
-        } as any;
-
-        data.events = [
-          {
-            date: result.date,
-            lap_number: null,
-            category: "Result",
-            message: winnerLine,
-            flag: "CHEQUERED",
-          },
-          ...(data.events || []),
-        ];
-      }
+    if (result) {
+      data.session = {
+        ...data.session,
+        winner: result.winner,
+        winnerTeam: result.winnerTeam,
+        winnerTime: result.time,
+        winnerLine: `Победитель гонки: ${result.winner} (${result.winnerTeam})`,
+      } as any;
     }
 
     return res.status(200).json({
       success: true,
       isDemo: false,
       source: "OpenF1 API + Jolpica API",
-      data: data || { session: null, drivers: [], weather: [], events: [], laps: {} },
-      note: data ? "Session data is loaded from OpenF1. Race winner is loaded from Jolpica." : "OpenF1 did not return data for this session.",
+      data,
+      note: "Данные загружены из OpenF1. Если отдельный блок пустой, значит OpenF1 не вернул этот тип данных для выбранной гонки.",
     });
   } catch (error: any) {
-    return res.status(200).json({
-      success: true,
+    return res.status(502).json({
+      success: false,
       isDemo: false,
       source: "OpenF1 API + Jolpica API",
-      data: { session: null, drivers: [], weather: [], events: [], laps: {} },
+      data: null,
       error: error?.message || "F1 API unavailable",
-      note: "No demo data was used.",
+      note: "Фейковые данные не использовались.",
     });
   }
 }

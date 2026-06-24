@@ -1,2617 +1,521 @@
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  TrendingUp,
-  CloudSun,
-  Flag,
-  Zap,
-  Calendar,
-  Users,
   Activity,
-  Info,
-  Gauge,
-  Clock,
-  RefreshCw,
-  ChevronRight,
-  MapPin,
   AlertTriangle,
-  Radio,
-  Sparkles,
-  Trophy,
-  Award,
-  Search,
-  Sliders,
-  Play,
-  RotateCcw,
+  Bot,
+  Calendar,
+  CloudSun,
   Database,
-  Flame,
-  UserCheck,
-  Building,
-  Sun,
-  Moon
+  Flag,
+  Gauge,
+  GitCompare,
+  Map as MapIcon,
+  MessageSquare,
+  RefreshCw,
+  Trophy,
+  UserRound,
+  Wrench,
 } from "lucide-react";
 import {
-  LineChart,
+  CartesianGrid,
+  Legend,
   Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  ReferenceLine,
-  AreaChart,
-  Area,
-  Legend
 } from "recharts";
-import { motion, AnimatePresence } from "motion/react";
-import { HISTORIC_DRIVERS, HISTORIC_CONSTRUCTORS, ALL_TIME_STATS } from "./f1db_data";
-import { MOCK_SESSIONS } from "./f1_mock";
 
-// Type declarations
-interface Driver {
-  driver_number: number;
-  broadcast_name: string;
-  full_name: string;
-  name_acronym: string;
-  team_name: string;
-  team_colour: string;
-  headshot_url: string;
-}
+type TabId = "results" | "map" | "driver" | "compare" | "issues" | "chat" | "data";
 
-interface Lap {
-  lap_number: number;
-  lap_duration: number | null;
-  duration_sector_1: number | null;
-  duration_sector_2: number | null;
-  duration_sector_3: number | null;
-  is_pit_out_lap: boolean;
-}
-
-interface WeatherCondition {
-  date: string;
-  air_temperature: number;
-  track_temperature: number;
-  humidity: number;
-  rainfall: number;
-}
-
-interface RaceEvent {
-  date: string;
-  lap_number: number | null;
-  category: string;
-  message: string;
-  flag: string | null;
-}
-
-interface SessionInfo {
+type SessionInfo = {
   session_key: number;
   session_name: string;
-  session_type: string;
-  meeting_key: number;
   meeting_name: string;
   location: string;
   country_name: string;
   year: number;
   date_start: string;
+  winner?: string;
+  winnerTeam?: string;
+};
+
+type Driver = {
+  driver_number: number;
+  full_name: string;
+  name_acronym?: string;
+  team_name?: string;
+  team_colour?: string;
+  headshot_url?: string;
+  starting_position?: number | null;
+  finishing_position?: number | null;
+  classified_laps?: number | null;
+  gap_to_leader?: number | string | null;
+  duration?: number | string | null;
+  finish_time?: number | string | null;
+  status?: string | null;
+  best_lap?: number | null;
+  best_lap_text?: string | null;
+  fastest_lap_rank?: number | null;
+  fastest_lap_lap?: number | null;
+  pit_stop_count?: number;
+  average_lap?: number | null;
+  median_lap?: number | null;
+  average_pit_stop?: number | null;
+  dnf?: boolean;
+  dns?: boolean;
+  dsq?: boolean;
+};
+
+type RaceData = {
+  session: SessionInfo;
+  summary: any;
+  drivers: Driver[];
+  driver_summaries: any[];
+  race_result: any[];
+  starting_grid: any[];
+  laps: any[];
+  pit_stops: any[];
+  stints: any[];
+  positions: any[];
+  intervals: any[];
+  events: any[];
+  race_control: any[];
+  weather: any[];
+  overtakes: any[];
+  team_radio: any[];
+  track_map: { source_driver_number?: number; source_driver_name?: string; points: any[]; note?: string };
+  issues: any[];
+  data_quality: Record<string, any>;
+};
+
+type ChatMessage = { role: "user" | "assistant"; text: string; provider?: string };
+
+const YEARS = [2026, 2025, 2024, 2023];
+const TABS: Array<{ id: TabId; label: string; icon: any }> = [
+  { id: "results", label: "Итог", icon: Trophy },
+  { id: "map", label: "Карта", icon: MapIcon },
+  { id: "driver", label: "Пилот", icon: UserRound },
+  { id: "compare", label: "Сравнение", icon: GitCompare },
+  { id: "issues", label: "Проблемы", icon: AlertTriangle },
+  { id: "chat", label: "ИИ-чат", icon: Bot },
+  { id: "data", label: "Данные API", icon: Database },
+];
+
+const QUICK_PROMPTS = [
+  "Кто выиграл гонку?",
+  "Покажи топ-3 и финишное время",
+  "У кого лучший круг?",
+  "Кто сошёл с дистанции?",
+  "Объясни гонку простыми словами",
+];
+
+function teamColor(value?: string) {
+  if (!value) return "#e10600";
+  return value.startsWith("#") ? value : `#${value}`;
 }
 
-interface StandingDriver {
-  position: number;
-  points: number;
-  wins: number;
-  driverName: string;
-  driverAcronym: string;
-  nationality: string;
-  teamName: string;
+function formatTime(sec: any) {
+  const value = Number(sec);
+  if (!Number.isFinite(value) || value <= 0) return "—";
+  const minutes = Math.floor(value / 60);
+  const seconds = (value % 60).toFixed(3).padStart(6, "0");
+  return minutes > 0 ? `${minutes}:${seconds}` : `${seconds} c`;
 }
 
-interface StandingConstructor {
-  position: number;
-  points: number;
-  wins: number;
-  teamName: string;
-  nationality: string;
+function displayTime(value: any) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "number") return formatTime(value);
+  return String(value);
 }
 
-interface RaceResult {
-  round: number;
-  raceName: string;
-  circuitName: string;
-  locality: string;
-  country: string;
-  date: string;
-  winner: string;
-  winnerAcronym: string;
-  winnerTeam: string;
-  time: string;
+function bestLapDisplay(driver: any) {
+  return driver?.best_lap_text || formatTime(driver?.best_lap);
 }
 
-// Simulated FastF1 telemetry coordinate points generator (for overlay tab)
-function generateFastF1LapData(driverA: string, driverB: string, param: "speed" | "throttle" | "brake" | "gear") {
-  const points = [];
-  const totalDistance = 5200; // Monaco to Silverstone typical telemetry points
-  const segments = 40;
-  
-  for (let i = 0; i <= segments; i++) {
-    const dist = (i * (totalDistance / segments));
-    const normalizedDist = dist / totalDistance;
-    
-    // Core track layout simulation (straights, braking zone, chicanes, high speed sweeper)
-    let baseSpeed = 260 + Math.sin(normalizedDist * Math.PI * 4) * 80; // fluctuation
-    let baseThrottle = 90 + Math.sin(normalizedDist * Math.PI * 5) * 20;
-    
-    // Simulation zone offsets for specific tracks
-    // Sharp Chicane at 35% distance
-    if (normalizedDist > 0.32 && normalizedDist < 0.40) {
-      baseSpeed = 80 + (normalizedDist - 0.32) * 200;
-      baseThrottle = 0;
-    }
-    // Heavy braking zone at 75% distance
-    if (normalizedDist > 0.72 && normalizedDist < 0.78) {
-      baseSpeed = 65;
-      baseThrottle = 5;
-    }
+function finishTimeDisplay(driver: any) {
+  return displayTime(driver?.finish_time ?? driver?.duration ?? driver?.gap_to_leader ?? driver?.status);
+}
 
-    baseThrottle = Math.max(0, Math.min(100, baseThrottle));
+function formatDate(value?: string) {
+  if (!value) return "—";
+  return new Date(value).toLocaleString("ru-RU", { dateStyle: "medium", timeStyle: "short" });
+}
 
-    // Telemetry differences for Driver A vs Driver B
-    let valA = 0;
-    let valB = 0;
+function statusLabel(driver: Driver) {
+  if (driver.dsq) return "DSQ — дисквалифицирован";
+  if (driver.dns) return "DNS — не стартовал";
+  if (driver.dnf) return driver.status || "DNF — не финишировал";
+  return driver.status || "Финишировал";
+}
 
-    if (param === "speed") {
-      // Driver A has better straight-line aerodynamic efficiency, Driver B breaks later
-      valA = Math.round(baseSpeed + (normalizedDist > 0.5 ? 4.5 : -1.2));
-      valB = Math.round(baseSpeed + (normalizedDist > 0.5 ? -2.0 : 5.1));
-    } else if (param === "throttle") {
-      valA = Math.round(baseThrottle + Math.cos(normalizedDist * 10) * 4);
-      valB = Math.round(baseThrottle - Math.cos(normalizedDist * 12) * 5);
-      valA = Math.max(0, Math.min(100, valA));
-      valB = Math.max(0, Math.min(100, valB));
-    } else if (param === "brake") {
-      // Driver A soft trail-braking, Driver B heavy stamp
-      const inBrakeRegion = (normalizedDist > 0.30 && normalizedDist < 0.34) || (normalizedDist > 0.70 && normalizedDist < 0.74);
-      valA = inBrakeRegion ? Math.round(75 + Math.sin(normalizedDist * 30) * 10) : 0;
-      valB = inBrakeRegion ? Math.round(92 + Math.cos(normalizedDist * 20) * 5) : 0;
-    } else { // Gear
-      let gearNum = Math.ceil(4 + Math.sin(normalizedDist * Math.PI * 3) * 3);
-      gearNum = Math.max(1, Math.min(8, gearNum));
-      valA = gearNum;
-      valB = (normalizedDist > 0.6 && normalizedDist < 0.8) ? Math.max(1, gearNum - 1) : gearNum;
-    }
+function positionText(value: any) {
+  return Number.isFinite(Number(value)) ? `${value}` : "—";
+}
 
-    points.push({
-      distance: Math.round(dist),
-      [driverA]: valA,
-      [driverB]: valB,
-      delta: Number(((valA - valB) * 0.004).toFixed(3)) // Time gap estimation
-    });
+async function apiJson(url: string, options?: RequestInit) {
+  const response = await fetch(url, options);
+  let payload: any = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
   }
-  return points;
+  if (!response.ok || payload?.success === false) {
+    throw new Error(payload?.error || `HTTP ${response.status}`);
+  }
+  return payload;
 }
 
-// Russian translation helper for F1 Race Control Messages
-function translateRaceControlMessage(msg: string): string {
-  if (!msg) return "";
-  let res = msg;
-  const dict: { [key: string]: string } = {
-    "RED FLAG - Session suspended after high-speed crash between Perez, Magnussen, and Hulkenberg at Beau Rivage": 
-      "КРАСНЫЙ ФЛАГ - Сессия остановлена после серьезной аварии между Пересом, Магнуссеном и Хюлькенбергом в повороте Beau Rivage",
-    "RESTART - Race restarted with standing start after track cleanup and repairs": 
-      "РЕСТАРТ - Гонка возобновлена со старта с места после очистки трассы и восстановления барьеров safety",
-    "DRS ENABLED - Race direction enabled the Drag Reduction System": 
-      "DRS РАЗРЕШЕН - Дирекция гонки активировала систему снижения лобового сопротивления (DRS)",
-    "YELLOW FLAG Sector 2 - Carlos Sainz punctured tire. Resumed race after immediate pitstop under red flag": 
-      "ЖЕЛТЫЙ ФЛАГ Сектор 2 - Прокол колеса у Карлоса Сайнса. Вернулся на трассу после пит-стопа под красным флагом",
-    "TRACK CLEAR - Yellow flag in Sector 2 cleared, full green-flag racing": 
-      "ТРАССА СВОБОДНА - Желтый флаг в Секторе 2 снят, объявлен режим зеленых флагов"
-  };
+function EmptyBlock({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 text-sm text-zinc-400">
+      <div className="font-bold text-zinc-200">{title}</div>
+      <p className="mt-1">{text}</p>
+    </div>
+  );
+}
 
-  if (dict[msg]) return dict[msg];
-
-  res = res.replace(/RED FLAG/gi, "КРАСНЫЙ ФЛАГ");
-  res = res.replace(/YELLOW FLAG/gi, "ЖЕЛТЫЙ ФЛАГ");
-  res = res.replace(/GREEN FLAG/gi, "ЗЕЛЕНЫЙ ФЛАГ");
-  res = res.replace(/DRS ENABLED/gi, "DRS РАЗРЕШЕН");
-  res = res.replace(/DRS DISABLED/gi, "DRS ОТКЛЮЧЕН");
-  res = res.replace(/SAFETY CAR/gi, "МАШИНА БЕЗОПАСНОСТИ");
-  res = res.replace(/VIRTUAL SAFETY CAR/gi, "ВИРТУАЛЬНЫЙ СЕЙФТИ-КАР");
-  res = res.replace(/VSC DEPLOYED/gi, "РЕЖИМ VSC АКТИВИРОВАН");
-  res = res.replace(/VSC ENDED/gi, "РЕЖИМ VSC ЗАВЕРШЕН");
-  res = res.replace(/RESTART/gi, "РЕСТАРТ");
-  res = res.replace(/TRACK CLEAR/gi, "ТРАССА СВОБОДНА");
-  res = res.replace(/Sector 1/gi, "Сектор 1");
-  res = res.replace(/Sector 2/gi, "Сектор 2");
-  res = res.replace(/Sector 3/gi, "Сектор 3");
-  res = res.replace(/cleared/gi, "снят");
-  res = res.replace(/INVESTIGATION/gi, "РАССЛЕДОВАНИЕ");
-  res = res.replace(/PENALTY/gi, "ШТРАФ");
-
-  return res;
+function StatCard({ title, value, hint }: { title: string; value: any; hint?: string }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-[#151720] p-4 shadow-xl">
+      <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">{title}</div>
+      <div className="mt-2 text-2xl font-black text-white">{value ?? "—"}</div>
+      {hint && <div className="mt-1 text-xs text-zinc-500">{hint}</div>}
+    </div>
+  );
 }
 
 export default function App() {
-  // Navigation tabs selector
-  const [activeTab, setActiveTab] = useState<"telemetry" | "standings" | "fastf1" | "f1db">("telemetry");
-
-  // Season and Session selectors
-  const [selectedYear, setSelectedYear] = useState<number>(2025);
-  const [sessionList, setSessionList] = useState<SessionInfo[]>([]);
+  const [year, setYear] = useState(2025);
+  const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [selectedSessionKey, setSelectedSessionKey] = useState<number | "">("");
-
-  // OpenF1 Tab States
-  const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
-  const [drivers, setDrivers] = useState<Driver[]>([]);
-  const [selectedDriver, setSelectedDriver] = useState<Driver | null>(null);
-  const [driverLaps, setDriverLaps] = useState<Lap[]>([]);
-  const [weatherData, setWeatherData] = useState<WeatherCondition[]>([]);
-  const [raceEvents, setRaceEvents] = useState<RaceEvent[]>([]);
-  const [bestLapTime, setBestLapTime] = useState<number | null>(null);
-  const [avgLapTime, setAvgLapTime] = useState<number | null>(null);
-  const [aiAnalysis, setAiAnalysis] = useState<string>("");
-  
-  // Jolpica Standing Tab States
-  const [jolpicaYear, setJolpicaYear] = useState<number>(2025);
-  const [standingDrivers, setStandingDrivers] = useState<StandingDriver[]>([]);
-  const [standingConstructors, setStandingConstructors] = useState<StandingConstructor[]>([]);
-  const [seasonRaces, setSeasonRaces] = useState<RaceResult[]>([]);
-  const [standingsLoading, setStandingsLoading] = useState<boolean>(false);
-  const [calendarLoading, setCalendarLoading] = useState<boolean>(false);
-
-  // FastF1 Tab States
-  const [fastFFYear, setFastFFYear] = useState<number>(2025);
-  const [ffDriverA, setFfDriverA] = useState<string>("Charles Leclerc");
-  const [ffDriverB, setFfDriverB] = useState<string>("Max Verstappen");
-  const [ffTelemetryParam, setFfTelemetryParam] = useState<"speed" | "throttle" | "brake" | "gear">("speed");
-  const [ffTelemetryCached, setFfTelemetryCached] = useState<any[]>([]);
-  const [isFastF1Generating, setIsFastF1Generating] = useState<boolean>(false);
-
-  // F1DB Tab States
-  const [f1dbSearchQuery, setF1dbSearchQuery] = useState<string>("");
-  const [f1dbCategory, setF1dbCategory] = useState<"all" | "drivers" | "teams" | "records">("all");
-
-  // Driver select filtering State
-  const [driverSearchQuery, setDriverSearchQuery] = useState<string>("");
-
-  // Theme Switching State ("dark" | "light")
-  const [theme, setTheme] = useState<"dark" | "light">(() => {
-    const saved = localStorage.getItem("f1_portal_theme");
-    return saved === "light" ? "light" : "dark";
-  });
-
-  const toggleTheme = () => {
-    const newTheme = theme === "dark" ? "light" : "dark";
-    setTheme(newTheme);
-    localStorage.setItem("f1_portal_theme", newTheme);
-  };
-
-  // General Loading flags
-  const [sessionsLoading, setSessionsLoading] = useState<boolean>(false);
-  const [dataLoading, setDataLoading] = useState<boolean>(false);
-  const [lapsLoading, setLapsLoading] = useState<boolean>(false);
-  const [aiLoading, setAiLoading] = useState<boolean>(false);
-  const [isDemoData, setIsDemoData] = useState<boolean>(false);
-  const [errorMessage, setErrorMessage] = useState<string>("");
-
-  // Driver comparison modal states
-  const [isCompareModalOpen, setIsCompareModalOpen] = useState<boolean>(false);
-  const [compareDriverA, setCompareDriverA] = useState<Driver | null>(null);
-  const [compareDriverB, setCompareDriverB] = useState<Driver | null>(null);
-  const [compareLapsA, setCompareLapsA] = useState<Lap[]>([]);
-  const [compareLapsB, setCompareLapsB] = useState<Lap[]>([]);
-  const [isCompareLoading, setIsCompareLoading] = useState<boolean>(false);
-
-  const fetchComparisonData = async (drvA: Driver | null, drvB: Driver | null) => {
-    if (!selectedSessionKey || !drvA || !drvB) return;
-    setIsCompareLoading(true);
-    try {
-      const [resA, resB] = await Promise.all([
-        fetch(`/api/driver-laps?session_key=${selectedSessionKey}&driver_number=${drvA.driver_number}`).then(r => r.json()),
-        fetch(`/api/driver-laps?session_key=${selectedSessionKey}&driver_number=${drvB.driver_number}`).then(r => r.json())
-      ]);
-      
-      if (resA.success) {
-        setCompareLapsA(resA.laps || []);
-      }
-      if (resB.success) {
-        setCompareLapsB(resB.laps || []);
-      }
-    } catch (err) {
-      console.error("Error fetching comparison laps:", err);
-    } finally {
-      setIsCompareLoading(false);
-    }
-  };
+  const [race, setRace] = useState<RaceData | null>(null);
+  const [activeTab, setActiveTab] = useState<TabId>("results");
+  const [selectedDriverNumber, setSelectedDriverNumber] = useState<number | "">("");
+  const [compareA, setCompareA] = useState<number | "">("");
+  const [compareB, setCompareB] = useState<number | "">("");
+  const [loadingSessions, setLoadingSessions] = useState(false);
+  const [loadingRace, setLoadingRace] = useState(false);
+  const [error, setError] = useState("");
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 
   useEffect(() => {
-    if (isCompareModalOpen && compareDriverA && compareDriverB) {
-      fetchComparisonData(compareDriverA, compareDriverB);
-    }
-  }, [isCompareModalOpen, compareDriverA?.driver_number, compareDriverB?.driver_number, selectedSessionKey]);
+    loadSessions(year);
+  }, [year]);
 
-  const openCompareModal = () => {
-    setIsCompareModalOpen(true);
-    if (selectedDriver) {
-      setCompareDriverA(selectedDriver);
-      const otherDriver = drivers.find(d => d.driver_number !== selectedDriver.driver_number) || null;
-      setCompareDriverB(otherDriver);
-    } else if (drivers.length > 0) {
-      setCompareDriverA(drivers[0]);
-      setCompareDriverB(drivers[1] || null);
-    }
-  };
-
-  // ========================================================
-  // 1. Core Loader: Year sessions (OpenF1 / Fallback)
-  // ========================================================
   useEffect(() => {
-    fetchSessions();
-  }, [selectedYear]);
-
-  const fetchSessions = async () => {
-    setSessionsLoading(true);
-    setErrorMessage("");
-    try {
-      const res = await fetch(`/api/sessions?year=${selectedYear}`);
-      const data = await res.json();
-      if (data.success) {
-        setSessionList(data.sessions || []);
-        setIsDemoData(data.isDemo || false);
-        if (data.sessions && data.sessions.length > 0) {
-          setSelectedSessionKey(data.sessions[0].session_key);
-        } else {
-          setSelectedSessionKey("");
-          setSessionInfo(null);
-          setDrivers([]);
-          setSelectedDriver(null);
-          setDriverLaps([]);
-          setWeatherData([]);
-          setRaceEvents([]);
-        }
-      } else {
-        throw new Error("API returned failure");
-      }
-    } catch (err) {
-      console.warn("API Offline or hosted statically - running safe local F1 fallback calendar...", err);
-      
-      const templates = [
-        { name: "Bahrain Grand Prix", location: "Sakhir", country: "Bahrain", month: 3, day: 2, keyOffset: 1 },
-        { name: "Saudi Arabian Grand Prix", location: "Jeddah", country: "Saudi Arabia", month: 3, day: 9, keyOffset: 2 },
-        { name: "Australian Grand Prix", location: "Melbourne", country: "Australia", month: 3, day: 24, keyOffset: 3 },
-        { name: "Japanese Grand Prix", location: "Suzuka", country: "Japan", month: 4, day: 7, keyOffset: 4 },
-        { name: "Chinese Grand Prix", location: "Shanghai", country: "China", month: 4, day: 21, keyOffset: 5 },
-        { name: "Miami Grand Prix", location: "Miami", country: "USA", month: 5, day: 5, keyOffset: 6 },
-        { name: "Emilia Romagna Grand Prix", location: "Imola", country: "Italy", month: 5, day: 19, keyOffset: 7 },
-        { name: "Monaco Grand Prix", location: "Monte Carlo", country: "Monaco", month: 5, day: 26, keyOffset: 8 },
-        { name: "Canadian Grand Prix", location: "Montreal", country: "Canada", month: 6, day: 9, keyOffset: 9 },
-        { name: "Spanish Grand Prix", location: "Barcelona", country: "Spain", month: 6, day: 23, keyOffset: 10 },
-        { name: "Austrian Grand Prix", location: "Spielberg", country: "Austria", month: 6, day: 30, keyOffset: 11 },
-        { name: "British Grand Prix", location: "Silverstone", country: "UK", month: 7, day: 7, keyOffset: 12 },
-        { name: "Hungarian Grand Prix", location: "Budapest", country: "Hungary", month: 7, day: 21, keyOffset: 13 },
-        { name: "Belgian Grand Prix", location: "Spa", country: "Belgium", month: 7, day: 28, keyOffset: 14 },
-        { name: "Dutch Grand Prix", location: "Zandvoort", country: "Netherlands", month: 8, day: 25, keyOffset: 15 },
-        { name: "Italian Grand Prix", location: "Monza", country: "Italy", month: 9, day: 1, keyOffset: 16 },
-        { name: "Azerbaijan Grand Prix", location: "Baku", country: "Azerbaijan", month: 9, day: 15, keyOffset: 17 },
-        { name: "Singapore Grand Prix", location: "Singapore", country: "Singapore", month: 9, day: 22, keyOffset: 18 },
-        { name: "United States Grand Prix", location: "Austin", country: "USA", month: 10, day: 20, keyOffset: 19 },
-        { name: "Mexico City Grand Prix", location: "Mexico City", country: "Mexico", month: 10, day: 27, keyOffset: 20 },
-        { name: "São Paulo Grand Prix", location: "São Paulo", country: "Brazil", month: 11, day: 3, keyOffset: 21 },
-        { name: "Las Vegas Grand Prix", location: "Las Vegas", country: "USA", month: 11, day: 23, keyOffset: 22 },
-        { name: "Qatar Grand Prix", location: "Lusail", country: "Qatar", month: 12, day: 1, keyOffset: 23 },
-        { name: "Abu Dhabi Grand Prix", location: "Yas Marina", country: "UAE", month: 12, day: 8, keyOffset: 24 },
-      ];
-
-      const mockSessionList = templates.map((t) => {
-        const monthStr = String(t.month).padStart(2, "0");
-        const dayStr = String(t.day).padStart(2, "0");
-        return {
-          session_key: selectedYear * 1000 + t.keyOffset,
-          session_name: "Race",
-          session_type: "Race",
-          meeting_key: selectedYear * 100 + t.keyOffset,
-          meeting_name: `${t.name} (${selectedYear})`,
-          location: t.location,
-          country_name: t.country,
-          year: selectedYear,
-          date_start: `${selectedYear}-${monthStr}-${dayStr}T14:00:00Z`
-        };
-      }).sort((a, b) => new Date(b.date_start).getTime() - new Date(a.date_start).getTime());
-
-      setSessionList(mockSessionList);
-      setIsDemoData(true);
-      if (mockSessionList.length > 0) {
-        setSelectedSessionKey(mockSessionList[0].session_key);
-      } else {
-        setSelectedSessionKey("");
-      }
-    } finally {
-      setSessionsLoading(false);
-    }
-  };
-
-  // ========================================================
-  // 2. Load Selected Session Data (Drivers, weather, messages)
-  // ========================================================
-  useEffect(() => {
-    if (selectedSessionKey) {
-      loadSessionData(Number(selectedSessionKey));
-    }
+    if (selectedSessionKey) loadRace(Number(selectedSessionKey));
   }, [selectedSessionKey]);
 
-  const loadSessionData = async (key: number) => {
-    setDataLoading(true);
-    setErrorMessage("");
-    setSelectedDriver(null);
-    setDriverSearchQuery("");
-    setDriverLaps([]);
-    setBestLapTime(null);
-    setAvgLapTime(null);
-    setAiAnalysis("");
-    
+  const selectedDriver = useMemo(() => {
+    if (!race || selectedDriverNumber === "") return null;
+    return race.driver_summaries?.find((driver) => driver.driver_number === Number(selectedDriverNumber)) || null;
+  }, [race, selectedDriverNumber]);
+
+  const compareDriverA = useMemo(() => {
+    if (!race || compareA === "") return null;
+    return race.driver_summaries?.find((driver) => driver.driver_number === Number(compareA)) || null;
+  }, [race, compareA]);
+
+  const compareDriverB = useMemo(() => {
+    if (!race || compareB === "") return null;
+    return race.driver_summaries?.find((driver) => driver.driver_number === Number(compareB)) || null;
+  }, [race, compareB]);
+
+  const selectedDriverLaps = useMemo(() => {
+    if (!race || selectedDriverNumber === "") return [];
+    return race.laps
+      .filter((lap) => lap.driver_number === Number(selectedDriverNumber) && lap.lap_duration)
+      .sort((a, b) => a.lap_number - b.lap_number)
+      .map((lap) => ({ lap: lap.lap_number, lap_time: Number(lap.lap_duration?.toFixed?.(3) || lap.lap_duration) }));
+  }, [race, selectedDriverNumber]);
+
+  const compareChart = useMemo(() => {
+    if (!race || !compareDriverA || !compareDriverB) return [];
+    const lapsA = race.laps.filter((lap) => lap.driver_number === compareDriverA.driver_number && lap.lap_duration);
+    const lapsB = race.laps.filter((lap) => lap.driver_number === compareDriverB.driver_number && lap.lap_duration);
+    const lapNumbers = Array.from(new Set([...lapsA.map((lap) => lap.lap_number), ...lapsB.map((lap) => lap.lap_number)])).sort((a, b) => a - b);
+    return lapNumbers.map((lapNumber) => {
+      const lapA = lapsA.find((lap) => lap.lap_number === lapNumber);
+      const lapB = lapsB.find((lap) => lap.lap_number === lapNumber);
+      return {
+        lap: lapNumber,
+        [compareDriverA.name_acronym || "A"]: lapA?.lap_duration ? Number(lapA.lap_duration.toFixed(3)) : null,
+        [compareDriverB.name_acronym || "B"]: lapB?.lap_duration ? Number(lapB.lap_duration.toFixed(3)) : null,
+      };
+    });
+  }, [race, compareDriverA, compareDriverB]);
+
+  async function loadSessions(nextYear: number) {
+    setLoadingSessions(true);
+    setError("");
+    setRace(null);
+    setSelectedSessionKey("");
     try {
-      const res = await fetch(`/api/session-data?session_key=${key}`);
-      const payload = await res.json();
-      
-      if (payload.success && payload.data) {
-        const d = payload.data;
-        setSessionInfo(d.session);
-        setDrivers(d.drivers || []);
-        setWeatherData(d.weather || []);
-        setRaceEvents(d.events || []);
-        setIsDemoData(payload.isDemo || false);
-
-        // Auto select Charles or Lando or Verstappen or first driver
-        if (d.drivers && d.drivers.length > 0) {
-          const favorite = d.drivers.find((dr: Driver) => dr.name_acronym === "LEC" || dr.name_acronym === "VER" || dr.name_acronym === "NOR") || d.drivers[0];
-          setSelectedDriver(favorite);
-        }
-      } else {
-        throw new Error("Session data API failure");
-      }
-    } catch (err) {
-      console.warn("API Offline or hosted statically - running safe local F1 telemetry loader...", err);
-      const isFallbackKey = key >= 2010000 && key <= 2027000;
-      let matchedSession = sessionList.find((s) => Number(s.session_key) === key);
-      
-      const keyOffset = key % 1000;
-      const baseKey = (keyOffset % 2 === 1) ? 9507 : 9541;
-      const mockKey = MOCK_SESSIONS[key] ? key : baseKey;
-      const d = MOCK_SESSIONS[mockKey];
-      
-      if (d) {
-        setSessionInfo(matchedSession || d.session);
-        setDrivers(d.drivers || []);
-        setWeatherData(d.weather || []);
-        setRaceEvents(d.events || []);
-        setIsDemoData(true);
-
-        if (d.drivers && d.drivers.length > 0) {
-          const favorite = d.drivers.find((dr: Driver) => dr.name_acronym === "LEC" || dr.name_acronym === "VER" || dr.name_acronym === "NOR") || d.drivers[0];
-          setSelectedDriver(favorite);
-        }
-      } else {
-        setErrorMessage("Режим оффлайн: демо-данные не найдены.");
-      }
+      const payload = await apiJson(`/api/sessions?year=${nextYear}`);
+      const list = payload.sessions || [];
+      setSessions(list);
+      setSelectedSessionKey(list[0]?.session_key || "");
+      if (!list.length) setError(payload.note || "OpenF1 не вернул гонки за этот год.");
+    } catch (err: any) {
+      setSessions([]);
+      setError(err.message || "Не удалось загрузить список гонок OpenF1.");
     } finally {
-      setDataLoading(false);
+      setLoadingSessions(false);
     }
-  };
+  }
 
-  // ========================================================
-  // 3. Load Selected Driver Laps
-  // ========================================================
-  useEffect(() => {
-    if (selectedSessionKey && selectedDriver) {
-      loadDriverLaps(Number(selectedSessionKey), selectedDriver.driver_number);
-    }
-  }, [selectedSessionKey, selectedDriver?.driver_number]);
-
-  const loadDriverLaps = async (sessKey: number, dNum: number) => {
-    setLapsLoading(true);
+  async function loadRace(sessionKey: number) {
+    setLoadingRace(true);
+    setError("");
+    setRace(null);
     try {
-      const res = await fetch(`/api/driver-laps?session_key=${sessKey}&driver_number=${dNum}`);
-      const payload = await res.json();
-      if (payload.success) {
-        const laps = payload.laps || [];
-        setDriverLaps(laps);
-
-        // Stats calculus
-        const realLaps = laps.filter((l: Lap) => l.lap_duration && l.lap_duration > 0);
-        if (realLaps.length > 0) {
-          const times = realLaps.map((l: Lap) => l.lap_duration as number);
-          setBestLapTime(Math.min(...times));
-          setAvgLapTime(times.reduce((a, b) => a + b, 0) / times.length);
-        } else {
-          setBestLapTime(null);
-          setAvgLapTime(null);
-        }
-      } else {
-        throw new Error("Laps API returned failure");
-      }
-    } catch (err) {
-      console.warn("API Offline or hosted statically - loading driver laps from mock data...", err);
-      let fallbackLaps: any[] = [];
-      if (MOCK_SESSIONS[sessKey]?.laps?.[dNum]) {
-        fallbackLaps = MOCK_SESSIONS[sessKey].laps[dNum];
-      } else if (MOCK_SESSIONS[sessKey]?.laps) {
-        const firstDriverNum = Object.keys(MOCK_SESSIONS[sessKey].laps)[0];
-        const baseLaps = MOCK_SESSIONS[sessKey].laps[Number(firstDriverNum)] || [];
-        const scale = 1 + (((dNum * 17) % 31) - 15) / 500;
-        fallbackLaps = baseLaps.map(l => ({
-          ...l,
-          lap_duration: l.lap_duration ? Number((l.lap_duration * scale).toFixed(3)) : null,
-          duration_sector_1: l.duration_sector_1 ? Number((l.duration_sector_1 * scale).toFixed(3)) : null,
-          duration_sector_2: l.duration_sector_2 ? Number((l.duration_sector_2 * scale).toFixed(3)) : null,
-          duration_sector_3: l.duration_sector_3 ? Number((l.duration_sector_3 * scale).toFixed(3)) : null,
-        }));
-      } else {
-        const baseLaps = MOCK_SESSIONS[9507]?.laps?.[dNum] || MOCK_SESSIONS[9507]?.laps?.[16] || [];
-        const scale = 1 + (((dNum * 17) % 31) - 15) / 500;
-        fallbackLaps = baseLaps.map(l => ({
-          ...l,
-          lap_duration: l.lap_duration ? Number((l.lap_duration * scale).toFixed(3)) : null,
-          duration_sector_1: l.duration_sector_1 ? Number((l.duration_sector_1 * scale).toFixed(3)) : null,
-          duration_sector_2: l.duration_sector_2 ? Number((l.duration_sector_2 * scale).toFixed(3)) : null,
-          duration_sector_3: l.duration_sector_3 ? Number((l.duration_sector_3 * scale).toFixed(3)) : null,
-        }));
-      }
-      setDriverLaps(fallbackLaps);
-
-      const realLaps = fallbackLaps.filter((l: Lap) => l.lap_duration && l.lap_duration > 0);
-      if (realLaps.length > 0) {
-        const times = realLaps.map((l: Lap) => l.lap_duration as number);
-        setBestLapTime(Math.min(...times));
-        setAvgLapTime(times.reduce((a, b) => a + b, 0) / times.length);
-      } else {
-        setBestLapTime(null);
-        setAvgLapTime(null);
-      }
+      const payload = await apiJson(`/api/race-dashboard?session_key=${sessionKey}`);
+      const data: RaceData = payload.data;
+      setRace(data);
+      const firstDriver = data.summary?.winner?.driver_number || data.drivers?.[0]?.driver_number || "";
+      const secondDriver = data.drivers?.find((driver) => driver.driver_number !== firstDriver)?.driver_number || "";
+      setSelectedDriverNumber(firstDriver);
+      setCompareA(firstDriver);
+      setCompareB(secondDriver);
+      setChatMessages([]);
+    } catch (err: any) {
+      setError(err.message || "Не удалось загрузить данные гонки OpenF1.");
     } finally {
-      setLapsLoading(false);
+      setLoadingRace(false);
     }
-  };
+  }
 
-  // ========================================================
-  // 4. Jolpica Standing / Results Loader
-  // ========================================================
-  useEffect(() => {
-    loadJolpicaStandingsAndResults();
-  }, [jolpicaYear]);
+  async function sendChatMessage(override?: string) {
+    const text = (override || chatInput).trim();
+    if (!text || !race || chatLoading) return;
+    const nextMessages: ChatMessage[] = [...chatMessages, { role: "user", text }];
+    setChatMessages(nextMessages);
+    setChatInput("");
+    setChatLoading(true);
 
-  const loadJolpicaStandingsAndResults = async () => {
-    setStandingsLoading(true);
-    setCalendarLoading(true);
+    const compactDriverSummaries = (race.driver_summaries || race.drivers || []).map((driver: any) => ({
+      driver_number: driver.driver_number,
+      full_name: driver.full_name,
+      team_name: driver.team_name,
+      starting_position: driver.starting_position,
+      finishing_position: driver.finishing_position,
+      finish_time: driver.finish_time,
+      status: driver.status,
+      gap_to_leader: driver.gap_to_leader,
+      position_delta: driver.position_delta,
+      best_lap: driver.best_lap,
+      best_lap_text: driver.best_lap_text,
+      fastest_lap_rank: driver.fastest_lap_rank,
+      pit_stop_count: driver.pit_stop_count,
+      dnf: driver.dnf,
+      dns: driver.dns,
+      dsq: driver.dsq,
+    }));
+
     try {
-      // Standing API Request
-      const stdRes = await fetch(`/api/standings?year=${jolpicaYear}`);
-      const stdPayload = await stdRes.json();
-      if (stdPayload.success) {
-        setStandingDrivers(stdPayload.drivers || []);
-        setStandingConstructors(stdPayload.constructors || []);
-      } else {
-        throw new Error("Standings API returned failure");
-      }
-
-      // Races Results API Request
-      const calRes = await fetch(`/api/results?year=${jolpicaYear}`);
-      const calPayload = await calRes.json();
-      if (calPayload.success) {
-        setSeasonRaces(calPayload.races || []);
-      } else {
-        throw new Error("Results API returned failure");
-      }
-    } catch (err) {
-      console.warn("API Offline or hosted statically - loading standings from fallback...", err);
-      
-      let fallbackDrivers = [];
-      let fallbackConstructors = [];
-
-      if (jolpicaYear === 2026) {
-        fallbackDrivers = [
-          { position: 1, points: 412, wins: 10, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
-          { position: 2, points: 388, wins: 5, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Ferrari" },
-          { position: 3, points: 374, wins: 4, driverName: "Lando Norris", driverAcronym: "NOR", nationality: "British", teamName: "McLaren" },
-          { position: 4, points: 345, wins: 2, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
-          { position: 5, points: 290, wins: 2, driverName: "Oscar Piastri", driverAcronym: "PIA", nationality: "Australian", teamName: "McLaren" },
-          { position: 6, points: 242, wins: 1, driverName: "George Russell", driverAcronym: "RUS", nationality: "British", teamName: "Mercedes" },
-        ];
-        fallbackConstructors = [
-          { position: 1, points: 733, wins: 7, teamName: "Ferrari", nationality: "Italian" },
-          { position: 2, points: 664, wins: 6, teamName: "McLaren", nationality: "British" },
-          { position: 3, points: 557, wins: 10, teamName: "Red Bull Racing", nationality: "Austrian" },
-          { position: 4, points: 310, wins: 1, teamName: "Mercedes", nationality: "British" },
-        ];
-      } else if (jolpicaYear === 2025) {
-        fallbackDrivers = [
-          { position: 1, points: 437, wins: 9, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
-          { position: 2, points: 384, wins: 3, driverName: "Lando Norris", driverAcronym: "NOR", nationality: "British", teamName: "McLaren" },
-          { position: 3, points: 325, wins: 2, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
-          { position: 4, points: 244, wins: 2, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
-          { position: 5, points: 228, wins: 1, driverName: "Oscar Piastri", driverAcronym: "PIA", nationality: "Australian", teamName: "McLaren" },
-          { position: 6, points: 190, wins: 1, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "Ferrari" },
-        ];
-        fallbackConstructors = [
-          { position: 1, points: 641, wins: 8, teamName: "McLaren", nationality: "British" },
-          { position: 2, points: 585, wins: 3, teamName: "Ferrari", nationality: "Italian" },
-          { position: 3, points: 544, wins: 9, teamName: "Red Bull Racing", nationality: "Austrian" },
-          { position: 4, points: 382, wins: 2, teamName: "Mercedes", nationality: "British" },
-        ];
-      } else if (jolpicaYear === 2024) {
-        fallbackDrivers = [
-          { position: 1, points: 575, wins: 15, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
-          { position: 2, points: 384, wins: 3, driverName: "Lando Norris", driverAcronym: "NOR", nationality: "British", teamName: "McLaren" },
-          { position: 3, points: 356, wins: 3, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
-          { position: 4, points: 262, wins: 2, driverName: "Oscar Piastri", driverAcronym: "PIA", nationality: "Australian", teamName: "McLaren" },
-          { position: 5, points: 258, wins: 2, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "Ferrari" },
-          { position: 6, points: 245, wins: 2, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
-        ];
-        fallbackConstructors = [
-          { position: 1, points: 651, wins: 5, teamName: "McLaren", nationality: "British" },
-          { position: 2, points: 614, wins: 5, teamName: "Ferrari", nationality: "Italian" },
-          { position: 3, points: 589, wins: 15, teamName: "Red Bull Racing", nationality: "Austrian" },
-          { position: 4, points: 473, wins: 3, teamName: "Mercedes", nationality: "British" },
-        ];
-      } else if (jolpicaYear === 2023) {
-        fallbackDrivers = [
-          { position: 1, points: 575, wins: 19, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
-          { position: 2, points: 285, wins: 2, driverName: "Sergio Perez", driverAcronym: "PER", nationality: "Mexican", teamName: "Red Bull Racing" },
-          { position: 3, points: 234, wins: 0, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
-          { position: 4, points: 206, wins: 0, driverName: "Fernando Alonso", driverAcronym: "ALO", nationality: "Spanish", teamName: "Aston Martin" },
-          { position: 5, points: 206, wins: 1, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
-          { position: 6, points: 200, wins: 1, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "Ferrari" },
-        ];
-        fallbackConstructors = [
-          { position: 1, points: 860, wins: 21, teamName: "Red Bull Racing", nationality: "Austrian" },
-          { position: 2, points: 409, wins: 0, teamName: "Mercedes", nationality: "British" },
-          { position: 3, points: 406, wins: 1, teamName: "Ferrari", nationality: "Italian" },
-          { position: 4, points: 302, wins: 0, teamName: "McLaren", nationality: "British" },
-        ];
-      } else if (jolpicaYear === 2022) {
-        fallbackDrivers = [
-          { position: 1, points: 454, wins: 15, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
-          { position: 2, points: 308, wins: 3, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
-          { position: 3, points: 305, wins: 2, driverName: "Sergio Perez", driverAcronym: "PER", nationality: "Mexican", teamName: "Red Bull Racing" },
-          { position: 4, points: 275, wins: 1, driverName: "George Russell", driverAcronym: "RUS", nationality: "British", teamName: "Mercedes" },
-          { position: 5, points: 246, wins: 1, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "Ferrari" },
-          { position: 6, points: 240, wins: 0, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
-        ];
-        fallbackConstructors = [
-          { position: 1, points: 759, wins: 17, teamName: "Red Bull Racing", nationality: "Austrian" },
-          { position: 2, points: 554, wins: 4, teamName: "Ferrari", nationality: "Italian" },
-          { position: 3, points: 515, wins: 1, teamName: "Mercedes", nationality: "British" },
-          { position: 4, points: 159, wins: 0, teamName: "McLaren", nationality: "British" },
-        ];
-      } else if (jolpicaYear === 2021) {
-        fallbackDrivers = [
-          { position: 1, points: 395, wins: 10, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
-          { position: 2, points: 387, wins: 8, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
-          { position: 3, points: 226, wins: 1, driverName: "Valtteri Bottas", driverAcronym: "BOT", nationality: "Finnish", teamName: "Mercedes" },
-          { position: 4, points: 190, wins: 1, driverName: "Sergio Perez", driverAcronym: "PER", nationality: "Mexican", teamName: "Red Bull Racing" },
-          { position: 5, points: 164, wins: 0, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "Ferrari" },
-          { position: 6, points: 160, wins: 0, driverName: "Lando Norris", driverAcronym: "NOR", nationality: "British", teamName: "McLaren" },
-        ];
-        fallbackConstructors = [
-          { position: 1, points: 613, wins: 9, teamName: "Mercedes", nationality: "British" },
-          { position: 2, points: 585, wins: 11, teamName: "Red Bull Racing", nationality: "Austrian" },
-          { position: 3, points: 323, wins: 0, teamName: "Ferrari", nationality: "Italian" },
-          { position: 4, points: 275, wins: 1, teamName: "McLaren", nationality: "British" },
-        ];
-      } else if (jolpicaYear === 2020) {
-        fallbackDrivers = [
-          { position: 1, points: 347, wins: 11, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
-          { position: 2, points: 223, wins: 2, driverName: "Valtteri Bottas", driverAcronym: "BOT", nationality: "Finnish", teamName: "Mercedes" },
-          { position: 3, points: 214, wins: 2, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
-          { position: 4, points: 125, wins: 1, driverName: "Sergio Perez", driverAcronym: "PER", nationality: "Mexican", teamName: "Racing Point" },
-          { position: 5, points: 119, wins: 0, driverName: "Daniel Ricciardo", driverAcronym: "RIC", nationality: "Australian", teamName: "Renault" },
-          { position: 6, points: 105, wins: 0, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "McLaren" },
-        ];
-        fallbackConstructors = [
-          { position: 1, points: 573, wins: 13, teamName: "Mercedes", nationality: "British" },
-          { position: 2, points: 319, wins: 2, teamName: "Red Bull Racing", nationality: "Austrian" },
-          { position: 3, points: 202, wins: 0, teamName: "McLaren", nationality: "British" },
-          { position: 4, points: 195, wins: 1, teamName: "Racing Point", nationality: "British" },
-        ];
-      } else if (jolpicaYear === 2019) {
-        fallbackDrivers = [
-          { position: 1, points: 413, wins: 11, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
-          { position: 2, points: 326, wins: 4, driverName: "Valtteri Bottas", driverAcronym: "BOT", nationality: "Finnish", teamName: "Mercedes" },
-          { position: 3, points: 278, wins: 3, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
-          { position: 4, points: 264, wins: 2, driverName: "Charles Leclerc", driverAcronym: "LEC", nationality: "Monegasque", teamName: "Ferrari" },
-          { position: 5, points: 240, wins: 1, driverName: "Sebastian Vettel", driverAcronym: "VET", nationality: "German", teamName: "Ferrari" },
-          { position: 6, points: 96, wins: 0, driverName: "Carlos Sainz", driverAcronym: "SAI", nationality: "Spanish", teamName: "McLaren" },
-        ];
-        fallbackConstructors = [
-          { position: 1, points: 739, wins: 15, teamName: "Mercedes", nationality: "British" },
-          { position: 2, points: 504, wins: 3, teamName: "Ferrari", nationality: "Italian" },
-          { position: 3, points: 417, wins: 3, teamName: "Red Bull Racing", nationality: "Austrian" },
-          { position: 4, points: 145, wins: 0, teamName: "McLaren", nationality: "British" },
-        ];
-      } else {
-        // 2018
-        fallbackDrivers = [
-          { position: 1, points: 408, wins: 11, driverName: "Lewis Hamilton", driverAcronym: "HAM", nationality: "British", teamName: "Mercedes" },
-          { position: 2, points: 320, wins: 5, driverName: "Sebastian Vettel", driverAcronym: "VET", nationality: "German", teamName: "Ferrari" },
-          { position: 3, points: 251, wins: 1, driverName: "Kimi Räikkönen", driverAcronym: "RAI", nationality: "Finnish", teamName: "Ferrari" },
-          { position: 4, points: 249, wins: 2, driverName: "Max Verstappen", driverAcronym: "VER", nationality: "Dutch", teamName: "Red Bull Racing" },
-          { position: 5, points: 247, wins: 0, driverName: "Valtteri Bottas", driverAcronym: "BOT", nationality: "Finnish", teamName: "Mercedes" },
-          { position: 6, points: 170, wins: 2, driverName: "Daniel Ricciardo", driverAcronym: "RIC", nationality: "Australian", teamName: "Red Bull Racing" },
-        ];
-        fallbackConstructors = [
-          { position: 1, points: 655, wins: 11, teamName: "Mercedes", nationality: "British" },
-          { position: 2, points: 571, wins: 6, teamName: "Ferrari", nationality: "Italian" },
-          { position: 3, points: 419, wins: 4, teamName: "Red Bull Racing", nationality: "Austrian" },
-          { position: 4, points: 93, wins: 0, teamName: "Renault", nationality: "French" },
-        ];
-      }
-      const fallbackRaces = [
-        { round: 1, raceName: "Bahrain Grand Prix", circuitName: "Bahrain International Circuit", locality: "Sakhir", country: "Bahrain", date: `${jolpicaYear}-03-02`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:31:44.742" },
-        { round: 2, raceName: "Saudi Arabian Grand Prix", circuitName: "Jeddah Street Circuit", locality: "Jeddah", country: "Saudi Arabia", date: `${jolpicaYear}-03-09`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:20:43.119" },
-        { round: 3, raceName: "Australian Grand Prix", circuitName: "Albert Park Circuit", locality: "Melbourne", country: "Australia", date: `${jolpicaYear}-03-24`, winner: "Carlos Sainz", winnerAcronym: "SAI", winnerTeam: "Ferrari", time: "1:20:26.843" },
-        { round: 4, raceName: "Japanese Grand Prix", circuitName: "Suzuka International Racing Course", locality: "Suzuka", country: "Japan", date: `${jolpicaYear}-04-07`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:54:23.566" },
-        { round: 5, raceName: "Chinese Grand Prix", circuitName: "Shanghai International Circuit", locality: "Shanghai", country: "China", date: `${jolpicaYear}-04-21`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:40:52.554" },
-        { round: 6, raceName: "Miami Grand Prix", circuitName: "Miami International Autodrome", locality: "Miami", country: "USA", date: `${jolpicaYear}-05-05`, winner: "Lando Norris", winnerAcronym: "NOR", winnerTeam: "McLaren", time: "1:30:49.876" },
-        { round: 7, raceName: "Emilia Romagna Grand Prix", circuitName: "Autodromo Enzo e Dino Ferrari", locality: "Imola", country: "Italy", date: `${jolpicaYear}-05-19`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:25:25.252" },
-        { round: 8, raceName: "Monaco Grand Prix", circuitName: "Circuit de Monaco", locality: "Monte Carlo", country: "Monaco", date: `${jolpicaYear}-05-26`, winner: "Charles Leclerc", winnerAcronym: "LEC", winnerTeam: "Ferrari", time: "1:41:22.001" },
-        { round: 9, raceName: "Canadian Grand Prix", circuitName: "Circuit Gilles Villeneuve", locality: "Montreal", country: "Canada", date: `${jolpicaYear}-06-09`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:28:30.410" },
-        { round: 10, raceName: "Spanish Grand Prix", circuitName: "Circuit de Barcelona-Catalunya", locality: "Barcelona", country: "Spain", date: `${jolpicaYear}-06-23`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:29:05.112" },
-        { round: 11, raceName: "Austrian Grand Prix", circuitName: "Red Bull Ring", locality: "Spielberg", country: "Austria", date: `${jolpicaYear}-06-30`, winner: "George Russell", winnerAcronym: "RUS", winnerTeam: "Mercedes", time: "1:24:22.410" },
-        { round: 12, raceName: "British Grand Prix", circuitName: "Silverstone Circuit", locality: "Silverstone", country: "UK", date: `${jolpicaYear}-07-07`, winner: "Lewis Hamilton", winnerAcronym: "HAM", winnerTeam: "Mercedes", time: "1:29:12.441" },
-        { round: 13, raceName: "Hungarian Grand Prix", circuitName: "Hungaroring", locality: "Budapest", country: "Hungary", date: `${jolpicaYear}-07-21`, winner: "Oscar Piastri", winnerAcronym: "PIA", winnerTeam: "McLaren", time: "1:38:01.992" },
-        { round: 14, raceName: "Belgian Grand Prix", circuitName: "Circuit de Spa-Francorchamps", locality: "Spa", country: "Belgium", date: `${jolpicaYear}-07-28`, winner: "Lewis Hamilton", winnerAcronym: "HAM", winnerTeam: "Mercedes", time: "1:19:57.510" },
-        { round: 15, raceName: "Dutch Grand Prix", circuitName: "Circuit Zandvoort", locality: "Zandvoort", country: "Netherlands", date: `${jolpicaYear}-08-25`, winner: "Lando Norris", winnerAcronym: "NOR", winnerTeam: "McLaren", time: "1:30:45.519" },
-        { round: 16, raceName: "Italian Grand Prix", circuitName: "Autodromo Nazionale Monza", locality: "Monza", country: "Italy", date: `${jolpicaYear}-08-31`, winner: "Charles Leclerc", winnerAcronym: "LEC", winnerTeam: "Ferrari", time: "1:14:40.727" },
-        { round: 17, raceName: "Azerbaijan Grand Prix", circuitName: "Baku City Circuit", locality: "Baku", country: "Azerbaijan", date: `${jolpicaYear}-09-15`, winner: "Oscar Piastri", winnerAcronym: "PIA", winnerTeam: "McLaren", time: "1:32:58.007" },
-        { round: 18, raceName: "Singapore Grand Prix", circuitName: "Marina Bay Street Circuit", locality: "Singapore", country: "Singapore", date: `${jolpicaYear}-09-22`, winner: "Lando Norris", winnerAcronym: "NOR", winnerTeam: "McLaren", time: "1:40:50.571" },
-        { round: 19, raceName: "United States Grand Prix", circuitName: "Circuit of the Americas", locality: "Austin", country: "USA", date: `${jolpicaYear}-10-20`, winner: "Charles Leclerc", winnerAcronym: "LEC", winnerTeam: "Ferrari", time: "1:35:09.631" },
-        { round: 20, raceName: "Mexico City Grand Prix", circuitName: "Autódromo Hermanos Rodríguez", locality: "Mexico City", country: "Mexico", date: `${jolpicaYear}-10-27`, winner: "Carlos Sainz", winnerAcronym: "SAI", winnerTeam: "Ferrari", time: "1:40:55.807" },
-        { round: 21, raceName: "São Paulo Grand Prix", circuitName: "Autódromo José Carlos Pace", locality: "São Paulo", country: "Brazil", date: `${jolpicaYear}-11-03`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "2:06:54.430" },
-        { round: 22, raceName: "Las Vegas Grand Prix", circuitName: "Las Vegas Strip Circuit", locality: "Las Vegas", country: "USA", date: `${jolpicaYear}-11-23`, winner: "George Russell", winnerAcronym: "RUS", winnerTeam: "Mercedes", time: "1:22:05.992" },
-        { round: 23, raceName: "Qatar Grand Prix", circuitName: "Lusail International Circuit", locality: "Lusail", country: "Qatar", date: `${jolpicaYear}-12-01`, winner: "Max Verstappen", winnerAcronym: "VER", winnerTeam: "Red Bull", time: "1:31:05.323" },
-        { round: 24, raceName: "Abu Dhabi Grand Prix", circuitName: "Yas Marina Circuit", locality: "Yas Marina", country: "UAE", date: `${jolpicaYear}-12-08`, winner: "Lewis Hamilton", winnerAcronym: "HAM", winnerTeam: "Mercedes", time: "1:39:45.302" }
-      ];
-      setStandingDrivers(fallbackDrivers);
-      setStandingConstructors(fallbackConstructors);
-      setSeasonRaces(fallbackRaces);
-    } finally {
-      setStandingsLoading(false);
-      setCalendarLoading(false);
-    }
-  };
-
-  // ========================================================
-  // 5. FastF1 Simulated Telemetry generator trigger
-  // ========================================================
-  useEffect(() => {
-    setIsFastF1Generating(true);
-    const timer = setTimeout(() => {
-      const laps = generateFastF1LapData(ffDriverA, ffDriverB, ffTelemetryParam);
-      setFfTelemetryCached(laps);
-      setIsFastF1Generating(false);
-    }, 450);
-    return () => clearTimeout(timer);
-  }, [ffDriverA, ffDriverB, ffTelemetryParam, fastFFYear]);
-
-  // ========================================================
-  // 6. Gemini Telemetry Summarizer
-  // ========================================================
-  const triggerAiAnalysis = async () => {
-    if (!sessionInfo || !selectedDriver) return;
-    setAiLoading(true);
-    setAiAnalysis("");
-    
-    try {
-      const res = await fetch("/api/analyze", {
+      const payload = await apiJson("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          session: sessionInfo,
-          driver: selectedDriver,
-          laps: driverLaps,
-          weather: weatherData,
-          events: raceEvents,
+          question: text,
+          messages: nextMessages.map((message) => ({ role: message.role, content: message.text })),
+          raceContext: {
+            session: race.session,
+            summary: race.summary,
+            top3: race.summary?.top3,
+            issues: race.issues?.slice(0, 30),
+            driver_summaries: compactDriverSummaries,
+            data_quality: race.data_quality,
+          },
         }),
       });
-
-      const payload = await res.json();
-      if (payload.success) {
-        setAiAnalysis(payload.analysis);
-      } else {
-        throw new Error("AI analysis API failure");
-      }
-    } catch (err) {
-      console.warn("Gemini API Offline or hosted statically - running safe local F1 telemetry summarizer...", err);
-      // Auto compute telemetry summaries
-      const validL = driverLaps.filter((l: Lap) => l.lap_duration && l.lap_duration > 0);
-      const times = validL.map((l: Lap) => l.lap_duration as number);
-      const bL = times.length > 0 ? Math.min(...times) : null;
-      const aL = times.length > 0 ? (times.reduce((a, b) => a + b, 0) / times.length) : null;
-      const formatTimeLocal = (sec: number | null) => {
-        if (!sec) return "-";
-        const mins = Math.floor(sec / 60);
-        const remainingSecs = (sec % 60).toFixed(3);
-        return mins > 0 ? `${mins}:${remainingSecs.padStart(6, "0")}` : `${remainingSecs}с`;
-      };
-
-      setAiAnalysis(`### 🏁 F1 AI Анализ (Локальный режим)
-
-Интегрированный локальный ИИ-анализатор изучил данные телеметрии и погодные сводки текущей сессии.
-
-1. **Общий обзор сессии**
-   Заезды проходят на легендарной трассе **${sessionInfo.location}** (${sessionInfo.country_name}) в рамках этапа **${sessionInfo.meeting_name} ${sessionInfo.year}**. Динамические погодные условия требуют от инженеров ювелирного контроля температуры прогревочных чехлов и давления в шинах для максимального механического зацепа.
-
-2. **⏱ Анализ темпа пилотирования ${selectedDriver.name_acronym}**
-   Пилот **${selectedDriver.full_name}** из команды **${selectedDriver.team_name}** демонстрирует стабильный гоночный темп.
-   - Всего кругов в этой сессии: **${driverLaps.length}**
-   - Лучший круг пилота: **${formatTimeLocal(bL)}**
-   - Средний темп на длинной серии: **${formatTimeLocal(aL)}**
-   На машине под номером **#${selectedDriver.driver_number}** инженеры применили оптимальные аэродинамические настройки, чтобы минимизировать сопротивление воздуха на длинных прямых и сохранить прижимную силу в скоростных апексах.
-
-3. **🚧 Влияние гоночных инцидентов**
-   Анализ сообщений Race Control показывает стабильную работу пилота во время желтых флагов и фаз автомобилей безопасности. Гонщик мастерски использует точки активации DRS и грамотно реализует тактическую схему *undercut*, избегая чрезмерной тепловой деградации резины.
-
-4. **💡 Резюме для зрителя**
-   Высокая стабильность секторов у **${selectedDriver.name_acronym}** говорит об отличной сбалансированности шасси ${selectedDriver.team_name}. Текущий гоночный темп пилота делает его одним из фаворитов в борьбе за подиум на этой трассе.`);
+      setChatMessages([...nextMessages, { role: "assistant", text: payload.answer || payload.analysis || "ИИ не вернул ответ.", provider: payload.provider }]);
+    } catch (err: any) {
+      setChatMessages([...nextMessages, { role: "assistant", text: `ИИ-чат недоступен: ${err.message || "ошибка запроса"}` }]);
     } finally {
-      setAiLoading(false);
+      setChatLoading(false);
     }
-  };
-
-  useEffect(() => {
-    if (sessionInfo && selectedDriver && driverLaps.length > 0) {
-      const timer = setTimeout(() => {
-        triggerAiAnalysis();
-      }, 700);
-      return () => clearTimeout(timer);
-    }
-  }, [selectedDriver?.driver_number, selectedSessionKey]);
-
-  // UI Format Helpers
-  const formatLapTime = (totalSeconds: number | null) => {
-    if (!totalSeconds) return "—";
-    const minutes = Math.floor(totalSeconds / 60);
-    const secs = (totalSeconds % 60).toFixed(3);
-    return minutes > 0 ? `${minutes}:${secs.padStart(6, "0")}` : `${secs}с`;
-  };
-
-  const getTeamColor = (hex: string) => {
-    if (!hex) return "#e10600";
-    return hex.startsWith("#") ? hex : `#${hex}`;
-  };
-
-  // Historic catalog filter
-  const filteredHistoricDrivers = HISTORIC_DRIVERS.filter((item) => {
-    const query = f1dbSearchQuery.toLowerCase();
-    const matchesSearch =
-      item.driver.toLowerCase().includes(query) ||
-      item.team.toLowerCase().includes(query) ||
-      item.year.toString().includes(query) ||
-      item.nationality.toLowerCase().includes(query);
-    
-    if (f1dbCategory === "all") return matchesSearch;
-    if (f1dbCategory === "drivers") return matchesSearch && item.year !== undefined;
-    return false;
-  });
-
-  // Stats inside modal helpers
-  const getSeasonStatsForDriver = (driver: Driver | null) => {
-    if (!driver) return { position: "—", points: "—", wins: "—" };
-    const acronym = driver.name_acronym;
-    const fullName = driver.full_name;
-
-    const match = standingDrivers.find(sd => {
-      return (
-        (sd.driverAcronym && sd.driverAcronym.toLowerCase() === acronym?.toLowerCase()) ||
-        (sd.driverName && sd.driverName.toLowerCase().includes(fullName?.toLowerCase() || ""))
-      );
-    });
-
-    if (match) {
-      return {
-        position: `${match.position}`,
-        points: `${match.points}`,
-        wins: `${match.wins}`
-      };
-    }
-    return { position: "—", points: "—", wins: "—" };
-  };
-
-  const bestA = compareLapsA.filter(l => l.lap_duration && l.lap_duration > 0).map(l => l.lap_duration as number);
-  const minA = bestA.length > 0 ? Math.min(...bestA) : null;
-  const avgA = bestA.length > 0 ? bestA.reduce((sum, v) => sum + v, 0) / bestA.length : null;
-
-  const bestB = compareLapsB.filter(l => l.lap_duration && l.lap_duration > 0).map(l => l.lap_duration as number);
-  const minB = bestB.length > 0 ? Math.min(...bestB) : null;
-  const avgB = bestB.length > 0 ? bestB.reduce((sum, v) => sum + v, 0) / bestB.length : null;
-
-  const strokeA = getTeamColor(compareDriverA?.team_colour || "e10600");
-  let strokeB = getTeamColor(compareDriverB?.team_colour || "3b82f6");
-  if (strokeA.toLowerCase() === strokeB.toLowerCase()) {
-    strokeB = "#facc15"; // yellow-400 contrast highlight for teammate
   }
 
-  // Combined chart generation
-  const allLapNumbers = Array.from(
-    new Set([
-      ...compareLapsA.map(l => l.lap_number),
-      ...compareLapsB.map(l => l.lap_number)
-    ])
-  ).sort((a, b) => a - b);
-
-  const combinedChartData = allLapNumbers.map((lapNum) => {
-    const lapA = compareLapsA.find(l => l.lap_number === lapNum);
-    const lapB = compareLapsB.find(l => l.lap_number === lapNum);
-    return {
-      lap: `L${lapNum}`,
-      lapNum,
-      [compareDriverA?.name_acronym || "Пилот А"]: lapA?.lap_duration && lapA.lap_duration > 0 ? Number(lapA.lap_duration.toFixed(3)) : null,
-      [compareDriverB?.name_acronym || "Пилот Б"]: lapB?.lap_duration && lapB.lap_duration > 0 ? Number(lapB.lap_duration.toFixed(3)) : null,
-    };
-  });
-
-  // Filter drivers by search query
-  const filteredDrivers = drivers.filter((d) => {
-    if (!driverSearchQuery) return true;
-    const query = driverSearchQuery.trim().toLowerCase();
-    return (
-      d.broadcast_name?.toLowerCase().includes(query) ||
-      d.full_name?.toLowerCase().includes(query) ||
-      d.team_name?.toLowerCase().includes(query) ||
-      d.name_acronym?.toLowerCase().includes(query) ||
-      String(d.driver_number).includes(query)
-    );
-  });
+  const winner = race?.summary?.winner;
+  const top3 = race?.summary?.top3 || [];
+  const issueCountByDriver = new globalThis.Map<number, number>();
+  for (const issue of race?.issues || []) {
+    issueCountByDriver.set(issue.driver_number, (issueCountByDriver.get(issue.driver_number) || 0) + 1);
+  }
 
   return (
-    <div className={`bg-[#0b0c10] text-[#cfd2d6] font-sans min-h-screen flex flex-col overflow-x-hidden border-t-4 border-[#e10600] transition-colors duration-200 ${theme === "light" ? "theme-light" : "theme-dark"}`}>
-      
-      {/* 🏎️ MODERN STREAMLINED NAV-HEADER */}
-      <header className="bg-gradient-to-b from-[#14151c] to-[#0d0e12] border-b border-[#252836] sticky top-0 z-50">
-        <div className="max-w-[1720px] mx-auto px-4 py-3 sm:py-4 flex flex-col md:flex-row items-center justify-between gap-4">
-          
-          {/* Logo Brand Title */}
+    <div className="min-h-screen bg-[#08090d] text-zinc-100">
+      <header className="sticky top-0 z-40 border-b border-white/10 bg-[#11131b]/95 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 bg-[#e10600] flex items-center justify-center font-black italic text-xl tracking-tighter text-white select-none rounded shadow-lg shadow-[#e10600]/10">
-              F1
-            </div>
+            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-[#e10600] text-xl font-black italic text-white shadow-lg shadow-red-950/50">F1</div>
             <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-lg font-black tracking-tight text-white uppercase italic">
-                  F1 ANALYTICS DECK
-                </h1>
-                <span className="text-[9px] bg-[#e10600]/15 text-[#ff3333] border border-[#e10600]/30 font-mono px-2 py-0.5 rounded font-black tracking-wider block">
-                  PRO APIS
-                </span>
-              </div>
-              <p className="text-[11px] text-gray-400 font-medium">
-                OpenF1 • Jolpica F1 • FastF1 Overlay • F1DB Historical Engine (1950-2026)
-              </p>
+              <h1 className="text-xl font-black uppercase tracking-tight text-white">F1 Race Analytics</h1>
+              <p className="text-xs text-zinc-400">OpenF1 Historical Data • GigaChat •</p>
             </div>
           </div>
-
-          {/* 🔘 PREMIUM VIEW SWITCHER & THEME ADJUSTMENT */}
-          <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
-            <nav className="flex bg-[#161824] p-1.5 rounded-xl border border-[#2d3142] w-full sm:w-auto max-w-2xl overflow-x-auto scrollbar-none">
-              {[
-                { id: "telemetry", label: "Телеметрия Hub", icon: Activity, desc: "OpenF1 Live" },
-                { id: "standings", label: "Таблицы & Результаты", icon: Award, desc: "Jolpica API" },
-                { id: "fastf1", label: "FastF1 Оверлей", icon: Sliders, desc: "Lap Analysis" },
-                { id: "f1db", label: "F1DB Архив 1950", icon: Trophy, desc: "Historical Stat" }
-              ].map((tab) => {
-                const IsSelected = activeTab === tab.id;
-                const Icon = tab.icon;
-                return (
-                  <button
-                    key={tab.id}
-                    id={`tab-${tab.id}`}
-                    onClick={() => setActiveTab(tab.id as any)}
-                    className={`flex items-center gap-2 px-4 py-2.5 rounded-lg transition-all duration-200 text-xs font-black uppercase tracking-wider shrink-0 mr-1 select-none ${
-                      IsSelected
-                        ? "bg-[#e10600] text-white shadow-lg shadow-[#e10600]/10"
-                        : "text-gray-400 hover:text-white hover:bg-white/5"
-                    }`}
-                  >
-                    <Icon className="w-4 h-4 shrink-0" />
-                    <div className="text-left">
-                      <span className="block leading-none">{tab.label}</span>
-                      <span className={`block text-[9px] lowercase font-mono opacity-60 leading-none mt-0.5 ${IsSelected ? "text-white" : "text-gray-500"}`}>{tab.desc}</span>
-                    </div>
-                  </button>
-                );
-              })}
-            </nav>
-
-            {/* 🌓 THEME TOGGLE SWITCH */}
-            <button
-              id="btn-toggle-theme"
-              onClick={toggleTheme}
-              className="p-3 px-4 rounded-xl border border-[#2d3142] bg-[#161824] hover:bg-[#1f2133] hover:border-[#383d53] text-gray-300 hover:text-white transition flex items-center justify-center gap-2 select-none duration-150 active:scale-95 text-[10px] font-black uppercase tracking-wider h-[46px] shrink-0 self-end sm:self-auto min-w-[46px]"
-              title={theme === "dark" ? "Переключить на светлую тему" : "Переключить на тёмную тему"}
-            >
-              {theme === "dark" ? (
-                <>
-                  <Sun className="w-3.5 h-3.5 text-yellow-400 shrink-0" />
-                  <span className="inline-block">Светлая</span>
-                </>
-              ) : (
-                <>
-                  <Moon className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                  <span className="inline-block">Тёмная</span>
-                </>
-              )}
-            </button>
-          </div>
-
+          <nav className="flex gap-2 overflow-x-auto rounded-2xl border border-white/10 bg-black/30 p-1">
+            {TABS.map((tab) => {
+              const Icon = tab.icon;
+              return (
+                <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold transition ${activeTab === tab.id ? "bg-[#e10600] text-white" : "text-zinc-400 hover:bg-white/5 hover:text-white"}`}>
+                  <Icon className="h-4 w-4" /> {tab.label}
+                </button>
+              );
+            })}
+          </nav>
         </div>
       </header>
 
-
-
-      <main className="flex-grow max-w-[1720px] mx-auto w-full p-4 sm:p-6 lg:p-8 flex flex-col gap-6">
-
-        {/* Dynamic Warning Notification */}
-        {errorMessage && (
-          <div className="bg-red-950/40 border border-red-500/30 text-red-100 p-4 rounded-xl text-xs flex items-center justify-between gap-3 font-mono animate-pulse">
-            <span className="flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-[#e10600] shrink-0" />
-              <span>{errorMessage}</span>
-            </span>
-            <button 
-              onClick={fetchSessions} 
-              className="bg-[#e10600] hover:bg-neutral-800 text-white font-bold px-3 py-1.5 rounded text-[10px] uppercase font-mono tracking-widest transition"
-            >
-              Переподключить OpenF1
-            </button>
+      <main className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6">
+        <section className="grid gap-4 rounded-3xl border border-white/10 bg-[#11131b] p-5 shadow-2xl lg:grid-cols-[220px_1fr_auto] lg:items-end">
+          <div>
+            <label className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-zinc-500"><Calendar className="h-4 w-4 text-[#e10600]" /> Сезон</label>
+            <select value={year} onChange={(event) => setYear(Number(event.target.value))} className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm font-bold text-white outline-none focus:border-[#e10600]">
+              {YEARS.map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
           </div>
-        )}
-
-        {/* ======================================================== */}
-        {/* VIEW 1: OPENF1 TELEMETRY HUB (DETAILED ENGINE OVERVIEW)  */}
-        {/* ======================================================== */}
-        {activeTab === "telemetry" && (
-          <div className="grid grid-cols-1 gap-6">
-            
-            {/* YEAR / GRAND PRIX SELECTION DECK */}
-            <div className="bg-[#151622] p-5 sm:p-6 rounded-2xl border border-[#26283b] relative overflow-hidden shadow-xl grid grid-cols-1 xl:grid-cols-12 gap-6 items-center">
-              <div className="absolute right-0 top-0 text-[#e10600]/5 text-9xl italic font-black select-none pointer-events-none transform translate-x-10 -translate-y-8 uppercase">
-                Telemetry
-              </div>
-
-              {/* Year Choose */}
-              <div className="xl:col-span-4 space-y-2 relative z-10">
-                <label className="text-[11px] font-semibold text-gray-450 tracking-wide flex items-center gap-1.5 uppercase select-none">
-                  <Calendar className="w-3.5 h-3.5 text-[#e10600]" /> Сезон гонок
-                </label>
-                <div className="flex bg-[#090a0f] p-1 rounded-xl border border-[#2c2f44] overflow-x-auto gap-1 scrollbar-thin">
-                  {[2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011, 2010].map((yr) => (
-                    <button
-                      key={yr}
-                      onClick={() => setSelectedYear(yr)}
-                      className={`px-3 py-1.5 text-[11px] font-bold rounded-lg transition-all tracking-wider shrink-0 ${
-                        selectedYear === yr
-                          ? "bg-[#e10600] text-white shadow-md"
-                          : "text-gray-400 hover:text-white hover:bg-white/5"
-                      }`}
-                    >
-                      {yr}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Selector box */}
-              <div className="xl:col-span-4 space-y-2 relative z-10">
-                <label className="text-[11px] font-semibold text-gray-450 tracking-wide flex items-center gap-1.5 uppercase select-none">
-                  <Flag className="w-3.5 h-3.5 text-[#e10600]" /> Этап / Гран-При
-                </label>
-                {sessionsLoading ? (
-                  <div className="h-10 bg-[#090a0f] rounded-xl animate-pulse flex items-center justify-center border border-[#26283b]">
-                    <span className="text-[10px] text-gray-500 font-mono tracking-wider italic">ЗАГРУЗКА ИЗ ХАБА OPENF1...</span>
-                  </div>
-                ) : (
-                  <div className="relative">
-                    <select
-                      id="telemetry-session-select"
-                      value={selectedSessionKey}
-                      onChange={(e) => setSelectedSessionKey(e.target.value === "" ? "" : Number(e.target.value))}
-                      className="w-full bg-[#090a0f] border border-[#2a2d41] px-4 py-2.5 text-xs font-bold text-white rounded-xl focus:outline-none focus:border-[#e10600] cursor-pointer appearance-none uppercase tracking-wide"
-                    >
-                      {sessionList.length === 0 && (
-                        <option value="">Нет записанных сессий за данный год</option>
-                      )}
-                      {sessionList.map((s) => (
-                        <option key={s.session_key} value={s.session_key}>
-                          🏁 {s.meeting_name} — {s.session_name} ({s.location})
-                        </option>
-                      ))}
-                    </select>
-                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-gray-500">
-                      <ChevronRight className="w-4 h-4 transform rotate-90" />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Stage Quick Details */}
-              <div className="xl:col-span-4 relative z-10 h-full">
-                <div className="bg-[#090a0f] border border-[#26283b] p-3 rounded-xl flex items-center justify-between h-full">
-                  <div>
-                    <span className="text-[9px] uppercase font-bold text-[#e10600] tracking-wider block">Текущий Этап</span>
-                    <span className="text-xs font-black text-white mt-1 block uppercase">
-                      {sessionInfo ? `${sessionInfo.meeting_name} • ${sessionInfo.location}` : "Сессия не загружается"}
-                    </span>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono px-2 py-1 rounded font-bold uppercase tracking-wider block">
-                      {isDemoData ? "РЕЗЕРВНЫЙ ПРЕСЕТ" : "ПОТОК ПРЯМОЙ"}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-            </div>
-
-            {/* KEY METRICS HORIZONTAL PANEL */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              
-              {/* BEST LAP */}
-              <div className="bg-[#14151f] p-5 rounded-xl border border-[#212333] relative overflow-hidden transition duration-150">
-                <span className="text-[11px] font-semibold text-gray-450 tracking-wide flex items-center gap-2 mb-2">
-                  <Clock className="w-4 h-4 text-[#e10600]" /> Рекорд круга пилота
-                </span>
-                <span className="text-xl sm:text-2xl font-bold font-mono tracking-tight text-white block">
-                  {formatLapTime(bestLapTime)}
-                </span>
-                <span className="text-[10px] text-[#e10600] font-mono mt-2 block font-semibold uppercase">
-                  {selectedDriver ? `ПОКАЗАТЕЛЬ: ${selectedDriver.name_acronym}` : "Нет заездов"}
-                </span>
-              </div>
-
-              {/* MEDIAN TEMPO */}
-              <div className="bg-[#14151f] p-5 rounded-xl border border-[#212333] relative overflow-hidden transition duration-150">
-                <span className="text-[11px] font-semibold text-gray-450 tracking-wide flex items-center gap-2 mb-2">
-                  <TrendingUp className="w-4 h-4 text-cyan-400" /> Средний гоночный Pace
-                </span>
-                <span className="text-xl sm:text-2xl font-bold font-mono tracking-tight text-white block">
-                  {formatLapTime(avgLapTime)}
-                </span>
-                <span className="text-[10px] text-gray-400 font-mono mt-2 block uppercase font-medium">
-                  Выносливость шин / темп
-                </span>
-              </div>
-
-              {/* TRACK THERMOMETER */}
-              <div className="bg-[#14151f] p-5 rounded-xl border border-[#212333] relative overflow-hidden transition duration-150">
-                <span className="text-[11px] font-semibold text-gray-450 tracking-wide flex items-center gap-2 mb-2">
-                  <Gauge className="w-4 h-4 text-orange-450" /> Асфальт / Градусники
-                </span>
-                <span className="text-xl sm:text-2xl font-bold font-mono tracking-tight text-white block">
-                  {weatherData.length > 0 
-                    ? `${weatherData[weatherData.length - 1].track_temperature.toFixed(1)}°C` 
-                    : "35.2°C"
-                  }
-                </span>
-                <span className="text-[10px] text-gray-400 font-mono mt-2 block uppercase font-medium">
-                  Воздух: {weatherData.length > 0 ? `${weatherData[weatherData.length - 1].air_temperature.toFixed(1)}°C` : "21.6°C"}
-                </span>
-              </div>
-
-              {/* MOISTURE / WET GRIP */}
-              <div className="bg-[#14151f] p-5 rounded-xl border border-[#212333] relative overflow-hidden transition duration-150">
-                <span className="text-[11px] font-semibold text-gray-450 tracking-wide flex items-center gap-2 mb-2">
-                  <CloudSun className="w-4 h-4 text-yellow-400" /> Состояние трассы
-                </span>
-                <span className="text-xl sm:text-2xl font-bold font-mono tracking-tight text-white block">
-                  {weatherData.length > 0 
-                    ? (weatherData[weatherData.length - 1].rainfall > 0 ? "🌧️ Дождь" : "☀️ Сухо") 
-                    : "☀️ Сухо"
-                  }
-                </span>
-                <span className="text-[10px] text-gray-400 font-mono mt-2 block uppercase font-medium">
-                  Влажность: {weatherData.length > 0 ? `${weatherData[weatherData.length - 1].humidity}%` : "54%"}
-                </span>
-              </div>
-
-            </div>
-
-            {/* DRIVERS ACTIVE CHIP SELECTOR BAND */}
-            <div className="space-y-3 bg-[#11131e]/40 p-4 sm:p-5 rounded-2xl border border-[#212333]/60">
-              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 border-b border-[#212333]/45 pb-3">
-                <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-                  <h3 className="text-xs font-semibold uppercase text-gray-300 tracking-wider flex items-center gap-2">
-                    <Users className="w-4 h-4 text-[#e10600]" /> Выберите пилота для построения графиков
-                  </h3>
-                  
-                  {/* Search input field */}
-                  {drivers.length > 0 && (
-                    <div className="relative min-w-[220px]">
-                      <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
-                        <Search className="w-3.5 h-3.5 text-gray-500" />
-                      </span>
-                      <input
-                        type="text"
-                        id="driver-search-input"
-                        placeholder="Поиск пилота / команды / номера..."
-                        value={driverSearchQuery}
-                        onChange={(e) => setDriverSearchQuery(e.target.value)}
-                        className="w-full bg-[#090a0f]/80 border border-[#2c2f44] hover:border-[#3f4460] focus:border-[#e10600] rounded-xl pl-9 pr-8 py-2 text-xs font-bold text-white placeholder-gray-500 focus:outline-none transition duration-150"
-                      />
-                      {driverSearchQuery && (
-                        <button
-                          type="button"
-                          onClick={() => setDriverSearchQuery("")}
-                          className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-white font-black text-xs transition"
-                        >
-                          ✕
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-                
-                <button
-                  id="btn-compare-drivers"
-                  onClick={openCompareModal}
-                  disabled={drivers.length < 2}
-                  className="flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-[#e10600] to-[#b30500] hover:from-[#ff1a12] hover:to-[#e10600] active:scale-95 disabled:opacity-50 disabled:pointer-events-none text-white font-black text-[10px] uppercase tracking-wider transition-all duration-150 shadow-md shadow-[#e10600]/15 self-start lg:self-auto"
-                >
-                  <Sliders className="w-3.5 h-3.5" /> Сравнить пилотов
-                </button>
-              </div>
-              
-              {dataLoading ? (
-                <div className="flex gap-2.5 overflow-x-auto pb-2">
-                  {[1, 2, 3, 4, 5, 6].map((idx) => (
-                    <div key={idx} className="w-[180px] h-[58px] bg-[#141520] border border-[#212333] rounded-xl shrink-0 animate-pulse" />
-                  ))}
-                </div>
-              ) : drivers.length === 0 ? (
-                <div className="text-center py-6 bg-[#14151f]/50 border border-[#222533] rounded-xl text-xs text-gray-500 font-bold">
-                  В этой сессии нет пилотов в базе. Рекомендуем сезон 2025 или 2024.
-                </div>
-              ) : filteredDrivers.length === 0 ? (
-                <div className="text-center py-6 bg-[#14151f]/30 border border-[#212333] rounded-xl text-xs text-gray-400">
-                  Пилоты по запросу &quot;<span className="text-white font-black">{driverSearchQuery}</span>&quot; не найдены.
-                </div>
-              ) : (
-                <div className="flex items-center gap-3.5 overflow-x-auto pb-3 pt-1 scrollbar-thin">
-                  {filteredDrivers.map((d) => {
-                    const isSelected = selectedDriver?.driver_number === d.driver_number;
-                    const cColor = getTeamColor(d.team_colour);
-                    return (
-                      <button
-                        key={d.driver_number}
-                        onClick={() => setSelectedDriver(d)}
-                        className={`group shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-xl border transition-all text-left ${
-                          isSelected
-                            ? "bg-[#1f2136] border-[#e10600] text-white shadow-md shadow-[#e10600]/10"
-                            : "bg-[#141520] border-[#212333] hover:bg-[#1b1c2b] text-gray-300"
-                        }`}
-                        style={{ borderLeft: `4px solid ${cColor}` }}
-                      >
-                        <div className="w-8 h-8 rounded-full bg-[#090a0f] flex items-center justify-center text-xs font-bold font-mono border border-[#2b2d41] relative shrink-0">
-                          <span style={{ color: cColor }}>{d.name_acronym}</span>
-                          <span className="absolute -bottom-1 -right-1 bg-[#1a1b24] text-[#cfd2d6] text-[8px] border border-[#2b2d41] font-mono px-1 rounded">
-                            {d.driver_number}
-                          </span>
-                        </div>
-                        <div>
-                          <div className="text-xs font-black uppercase text-white truncate max-w-[110px]">{d.broadcast_name}</div>
-                          <div className="text-[9px] text-gray-400 font-medium truncate max-w-[110px]">{d.team_name}</div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* TELEMETRY CHART AND AI RESIDENT COCKPIT - PANEL SPLIT */}
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-stretch">
-              
-              {/* PRIMARY GRAPH PANEL */}
-              <div className="bg-[#141520] border border-[#212333] rounded-2xl p-5 flex flex-col justify-between shadow-lg">
-                <div>
-                  <div className="flex justify-between items-center border-b border-[#212333] pb-3 mb-4">
-                    <div>
-                      <h3 className="text-xs font-black uppercase text-white tracking-widest flex items-center gap-1.5 italic">
-                        <Activity className="w-4 h-4 text-[#e10600]" /> График прохождения кругов: {selectedDriver?.full_name || "—"}
-                      </h3>
-                      <p className="text-[10px] text-gray-400 mt-1">Отображает секунды на секунды сессии (меньшая высота — выше скорость)</p>
-                    </div>
-                    {driverLaps.length > 0 && (
-                      <span className="text-[9px] bg-emerald-500/10 text-emerald-400 font-mono tracking-widest px-2.5 py-1 rounded font-bold uppercase border border-emerald-500/20">
-                        {driverLaps.length} КРУГОВ
-                      </span>
-                    )}
-                  </div>
-
-                  {lapsLoading ? (
-                    <div className="h-[260px] flex flex-col items-center justify-center gap-3">
-                      <RefreshCw className="w-8 h-8 text-[#e10600] animate-spin" />
-                      <span className="text-xs text-gray-400 font-mono tracking-widest uppercase">Построение секторов...</span>
-                    </div>
-                  ) : driverLaps.length === 0 ? (
-                    <div className="h-[260px] flex flex-col items-center justify-center text-center p-6 bg-black/10 rounded-xl border border-[#212333] border-dashed">
-                      <Info className="w-10 h-10 text-gray-600 mb-2" />
-                      <span className="text-xs font-black text-gray-400">Нет телеметрических логов</span>
-                      <p className="text-[10px] text-gray-500 mt-1 max-w-sm">
-                        Выберите сессию и кликните на любого F1 пилота в горизонтальной линейке шага 2 для получения живых телеметрических отчетов.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="w-full h-[260px] mt-2">
-                      <ResponsiveContainer width="100%" height={260}>
-                        <LineChart
-                          data={driverLaps.map((lap) => ({
-                            lap: `L${lap.lap_number}`,
-                            duration: lap.lap_duration && lap.lap_duration > 0 ? Number(lap.lap_duration.toFixed(3)) : null,
-                            "Sector 1": lap.duration_sector_1 ? Number(lap.duration_sector_1.toFixed(2)) : null,
-                            "Sector 2": lap.duration_sector_2 ? Number(lap.duration_sector_2.toFixed(2)) : null,
-                            "Sector 3": lap.duration_sector_3 ? Number(lap.duration_sector_3.toFixed(2)) : null,
-                          }))}
-                          margin={{ top: 10, right: 10, left: -25, bottom: 5 }}
-                        >
-                          <CartesianGrid stroke={theme === "light" ? "#e5e7eb" : "#1c1d29"} strokeDasharray="3 3" />
-                          <XAxis dataKey="lap" stroke={theme === "light" ? "#4b5563" : "#5d627c"} style={{ fontSize: 9, fontFamily: "monospace" }} />
-                          <YAxis stroke={theme === "light" ? "#4b5563" : "#5d627c"} style={{ fontSize: 9, fontFamily: "monospace" }} domain={["auto", "auto"]} />
-                          <Tooltip
-                            contentStyle={theme === "light" 
-                              ? { backgroundColor: "#ffffff", borderColor: "#e5e7eb", color: "#111827", borderRadius: "10px", boxShadow: "0 4px 10px rgba(0,0,0,0.08)" } 
-                              : { backgroundColor: "#0c0d12", borderColor: "#242637", color: "#ccc", borderRadius: "10px" }
-                            }
-                            itemStyle={theme === "light"
-                              ? { color: "#111827", fontSize: 11, fontFamily: "monospace" }
-                              : { color: "#ccc", fontSize: 11, fontFamily: "monospace" }
-                            }
-                          />
-                          <Line
-                            type="monotone"
-                            dataKey="duration"
-                            name="Круг (сек)"
-                            stroke="#e10600"
-                            strokeWidth={3}
-                            dot={{ r: 4, stroke: "#0b0c10", strokeWidth: 1.5 }}
-                            activeDot={{ r: 6 }}
-                            connectNulls
-                          />
-                          <Line type="monotone" dataKey="Sector 1" name="Сектор 1" stroke="#3b82f6" strokeWidth={1} dot={false} strokeDasharray="3 3" connectNulls />
-                          <Line type="monotone" dataKey="Sector 2" name="Сектор 2" stroke="#eab308" strokeWidth={1} dot={false} strokeDasharray="3 3" connectNulls />
-                          <Line type="monotone" dataKey="Sector 3" name="Сектор 3" stroke="#e10600" strokeWidth={1} dot={false} strokeDasharray="3 3" connectNulls />
-                          {bestLapTime && (
-                            <ReferenceLine 
-                              y={bestLapTime} 
-                              label={{ value: `Рекорд: ${bestLapTime.toFixed(3)}с`, fill: "#EF4444", fontSize: 9, position: "top", fontWeight: "bold" }} 
-                              stroke="#ff3333" 
-                              strokeDasharray="4 4" 
-                            />
-                          )}
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-                  )}
-                </div>
-
-                {driverLaps.length > 0 && (
-                  <div className="grid grid-cols-3 gap-2.5 mt-4 pt-4 border-t border-[#212333] text-[10px] font-mono">
-                    <div className="bg-[#090a0f] p-2 rounded-lg border border-[#212333] text-center">
-                      <span className="text-gray-500 block uppercase">Пройдено кругов</span>
-                      <span className="text-white font-bold text-xs mt-0.5 block">{Math.max(...driverLaps.map(l => l.lap_number))}</span>
-                    </div>
-                    <div className="bg-[#090a0f] p-2 rounded-lg border border-[#212333] text-center">
-                      <span className="text-gray-500 block uppercase">Пит-стопов</span>
-                      <span className="text-yellow-400 font-bold text-xs mt-0.5 block">
-                        {driverLaps.filter(l => l.is_pit_out_lap).length}
-                      </span>
-                    </div>
-                    <div className="bg-[#090a0f] p-2 rounded-lg border border-[#212333] text-center">
-                      <span className="text-gray-500 block uppercase">Анализ сектора</span>
-                      <span className="text-emerald-400 font-bold text-[10px] uppercase mt-0.5 block">STABLE OK</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* AUTOMATED AI REPORT PANEL */}
-              <div className="bg-[#141520] border border-[#212333] rounded-2xl p-5 flex flex-col justify-between shadow-lg relative">
-                <div>
-                  <div className="flex justify-between items-center border-b border-[#212333] pb-3 mb-4">
-                    <div className="flex items-center gap-2">
-                      <Sparkles className="w-4.5 h-4.5 text-[#e10600] animate-pulse" />
-                      <div>
-                        <h3 className="text-xs font-black uppercase text-white tracking-widest flex items-center gap-1">ИИ-Резидент: Формульный Аналитик</h3>
-                        <p className="text-[9px] text-[#e10600] font-mono font-bold uppercase">Провайдер: Google Gemini 3.5-Flash</p>
-                      </div>
-                    </div>
-                    <button
-                      onClick={triggerAiAnalysis}
-                      disabled={aiLoading || !selectedDriver}
-                      className="bg-[#e10600] hover:bg-neutral-800 disabled:opacity-50 text-white font-mono text-[9px] uppercase tracking-wider px-3 py-1.5 rounded-lg transition border border-[#ff3333]/20"
-                    >
-                      {aiLoading ? "Генерация..." : "Обновить разбор"}
-                    </button>
-                  </div>
-
-                  <div className="font-mono text-xs leading-relaxed max-h-[290px] overflow-y-auto space-y-3.5 pr-2">
-                    {aiLoading ? (
-                      <div className="h-[210px] flex flex-col items-center justify-center text-center gap-2">
-                        <RefreshCw className="w-9 h-9 animate-spin text-[#e10600]" />
-                        <span className="text-xs font-bold text-white uppercase font-mono mt-2">ИИ анализирует графики и деградацию резины...</span>
-                      </div>
-                    ) : !selectedDriver ? (
-                      <div className="h-[210px] flex flex-col items-center justify-center text-gray-500 italic text-center">
-                        Выберите гонщика для мгновенного составления ИИ-отчёта
-                      </div>
-                    ) : aiAnalysis ? (
-                      <div className="text-gray-300 space-y-4">
-                        {aiAnalysis.split("\n\n").map((chunk, idx) => {
-                          const isHeader = chunk.trim().startsWith("###");
-                          const cleanText = chunk.replace(/[#*]/g, "").trim();
-                          
-                          if (isHeader) {
-                            return (
-                              <h4 key={idx} className="text-xs font-black uppercase text-white border-l-2 border-[#e10600] pl-2 pt-2 tracking-widest mt-3">
-                                {cleanText}
-                              </h4>
-                            );
-                          }
-                          return (
-                            <p key={idx} className="bg-black/20 p-3 rounded-lg border border-[#1b1c2b] text-[11px] leading-relaxed text-gray-300">
-                              {cleanText}
-                            </p>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="bg-[#090a0f] p-4.5 rounded-xl border border-[#212333]/70 space-y-2.5">
-                        <h4 className="text-xs font-bold text-white uppercase flex items-center gap-1.5">
-                          <Radio className="w-3.5 h-3.5 text-emerald-400" /> Подготовка спортивного доклада...
-                        </h4>
-                        <p className="text-gray-400 text-[11px] leading-relaxed font-mono">
-                          Искусственный интеллект готовит разбор гоночного ритма для {selectedDriver.full_name} на этапе {sessionInfo?.meeting_name}. Сводный отчет по секторам появится через секунду.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="mt-4 p-2.5 bg-[#090a0f] rounded-lg text-[9px] text-gray-500 flex items-center justify-between font-mono border border-[#1b1c2b]">
-                  <span>Сводка: телеметрия + износ + погода</span>
-                  <span>КОНФИГУРАЦИЯ: AIR-PACE-PRO</span>
-                </div>
-              </div>
-
-            </div>
-
-            {/* RACE CONTROL TIMELINE TIMESTAMPS */}
-            <div className="bg-[#141520] border border-[#212333] rounded-2xl p-5 shadow-sm">
-              <div className="flex items-center justify-between border-b border-[#212333] pb-3 mb-4">
-                <h3 className="text-xs font-black uppercase text-[#e10600] tracking-widest flex items-center gap-2">
-                  <Flag className="w-4 h-4" /> Сообщения Дирекции гонки (Race Control Feed)
-                </h3>
-                <span className="text-[10px] px-2.5 py-0.5 bg-[#0d0e15] text-gray-400 font-mono tracking-wider border border-[#212333] rounded">
-                  {raceEvents.length} СОБЫТИЙ
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5 max-h-[190px] overflow-y-auto pr-1">
-                {raceEvents.length === 0 ? (
-                  <div className="col-span-full text-center py-6 text-gray-500 text-xs font-bold">
-                    Нет флагов безопасности или инцидентов трассы. Сессия чистая.
-                  </div>
-                ) : (
-                  raceEvents.map((evt, index) => {
-                    let cBorder = "border-[#212333] bg-[#141520] text-gray-300";
-                    if (evt.flag === "RED") cBorder = "border-red-600/30 bg-red-950/20 text-red-200";
-                    else if (evt.flag === "YELLOW") cBorder = "border-yellow-600/30 bg-yellow-950/20 text-yellow-100";
-                    else if (evt.flag === "GREEN") cBorder = "border-emerald-600/30 bg-emerald-950/20 text-emerald-100";
-                    else if (evt.flag === "VSC") cBorder = "border-orange-600/30 bg-orange-950/20 text-orange-200";
-
-                    return (
-                      <div key={index} className={`p-3 border rounded-xl flex flex-col justify-between text-xs font-mono leading-relaxed ${cBorder}`}>
-                        <div className="flex justify-between items-center mb-1 text-[9px] font-black">
-                          <span className="text-gray-400">{evt.lap_number ? `Круг ${evt.lap_number}` : "Общее"}</span>
-                          {evt.flag && <span className="px-1.5 py-0.2 rounded bg-black/40 text-white font-bold">{evt.flag}</span>}
-                        </div>
-                        <p className="text-[11px] text-gray-200">{translateRaceControlMessage(evt.message)}</p>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-
+          <div>
+            <label className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-zinc-500"><Flag className="h-4 w-4 text-[#e10600]" /> Гонка</label>
+            <select value={selectedSessionKey} onChange={(event) => setSelectedSessionKey(event.target.value ? Number(event.target.value) : "")} disabled={loadingSessions || sessions.length === 0} className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm font-bold text-white outline-none focus:border-[#e10600] disabled:opacity-50">
+              {sessions.length === 0 && <option value="">Нет гонок</option>}
+              {sessions.map((session) => <option key={session.session_key} value={session.session_key}>{session.meeting_name} — {session.location} — {formatDate(session.date_start)}</option>)}
+            </select>
           </div>
+          <button onClick={() => selectedSessionKey && loadRace(Number(selectedSessionKey))} disabled={!selectedSessionKey || loadingRace} className="flex h-[46px] items-center justify-center gap-2 rounded-2xl bg-[#e10600] px-5 text-xs font-black uppercase tracking-widest text-white transition hover:bg-red-700 disabled:opacity-50">
+            <RefreshCw className={`h-4 w-4 ${loadingRace ? "animate-spin" : ""}`} /> Обновить
+          </button>
+        </section>
+
+        {error && <div className="flex items-start gap-3 rounded-2xl border border-red-500/30 bg-red-950/30 p-4 text-sm text-red-100"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-400" /><div><div className="font-bold">Не удалось загрузить данные</div><div className="text-red-200/80">{error}</div></div></div>}
+        {(loadingRace || loadingSessions) && <div className="rounded-3xl border border-white/10 bg-[#11131b] p-8 text-center text-zinc-400"><RefreshCw className="mx-auto mb-3 h-8 w-8 animate-spin text-[#e10600]" />Загрузка данных...</div>}
+        {!loadingRace && !race && !error && <EmptyBlock title="Выбери гонку" text="После выбора сезона и гонки сайт загрузит итог, пилотов, финишное время, лучшие круги, карту, инциденты и сравнение." />}
+
+        {race && (
+          <>
+            <section className="grid gap-4 lg:grid-cols-4">
+              <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-[#191b26] to-[#101119] p-5 lg:col-span-2">
+                <div className="text-xs font-bold uppercase tracking-[0.25em] text-[#e10600]">{race.session.session_name}</div>
+                <h2 className="mt-2 text-3xl font-black text-white">{race.session.meeting_name}</h2>
+                <p className="mt-2 text-sm text-zinc-400">{race.session.location}, {race.session.country_name} • {formatDate(race.session.date_start)}</p>
+                <div className="mt-4 flex flex-wrap gap-2 text-xs">
+                  <span className="rounded-full bg-emerald-500/10 px-3 py-1 font-bold text-emerald-300">{race.data_quality?.source || "OpenF1 API"}</span>
+                  <span className="rounded-full bg-white/5 px-3 py-1 font-bold text-zinc-300">{race.data_quality?.has_laps ? "круги доступны" : "только итог/без кругов"}</span>
+                </div>
+              </div>
+              <StatCard title="Победитель" value={winner?.full_name || race.session.winner || "—"} hint={winner?.team_name || race.session.winnerTeam} />
+              <StatCard title="Пилотов" value={race.summary?.total_drivers || race.drivers.length} hint={`DNF: ${race.summary?.dnf_count || 0}, DSQ: ${race.summary?.dsq_count || 0}`} />
+            </section>
+
+            {activeTab === "results" && <ResultsTab race={race} top3={top3} issueCountByDriver={issueCountByDriver} setSelectedDriverNumber={setSelectedDriverNumber} setActiveTab={setActiveTab} />}
+            {activeTab === "map" && <MapTab race={race} />}
+            {activeTab === "driver" && <DriverTab race={race} selectedDriverNumber={selectedDriverNumber} selectedDriver={selectedDriver} selectedDriverLaps={selectedDriverLaps} setSelectedDriverNumber={setSelectedDriverNumber} />}
+            {activeTab === "compare" && <CompareTab race={race} compareA={compareA} compareB={compareB} compareDriverA={compareDriverA} compareDriverB={compareDriverB} compareChart={compareChart} issueCountByDriver={issueCountByDriver} setCompareA={setCompareA} setCompareB={setCompareB} />}
+            {activeTab === "issues" && <IssuesTab race={race} />}
+            {activeTab === "chat" && <ChatTab chatInput={chatInput} chatMessages={chatMessages} chatLoading={chatLoading} setChatInput={setChatInput} sendChatMessage={sendChatMessage} />}
+            {activeTab === "data" && <DataTab race={race} />}
+          </>
         )}
-
-        {/* ======================================================== */}
-        {/* VIEW 2: CHAMPIONSHIP STANDINGS & RESULTS (JOLPICA F1 API) */}
-        {/* ======================================================== */}
-        {activeTab === "standings" && (
-          <div className="grid grid-cols-1 gap-6">
-
-            {/* JOLPICA CONTROL SELECTOR DECK */}
-            <div className="bg-[#151622] p-5 rounded-2xl border border-[#26283b] relative overflow-hidden shadow-xl grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
-              <div className="absolute right-0 top-0 text-[#e10600]/5 text-9xl italic font-black select-none pointer-events-none transform translate-x-12 -translate-y-8 uppercase">
-                Ergast
-              </div>
-              <div className="md:col-span-4 space-y-2 relative z-10">
-                <label className="text-[10px] uppercase font-black text-[#e10600] tracking-widest flex items-center gap-1.5">
-                  <Calendar className="w-4 h-4" /> Сезон для загрузки зачетов
-                </label>
-                <div className="flex bg-[#090a0f] p-1 rounded-xl border border-[#2a2d41] overflow-x-auto scrollbar-thin">
-                  {[2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011, 2010].map((yr) => (
-                    <button
-                      key={yr}
-                      onClick={() => setJolpicaYear(yr)}
-                      className={`px-3 py-2 text-[11px] font-black rounded-lg transition-all tracking-wider shrink-0 mr-1 ${
-                        jolpicaYear === yr
-                          ? "bg-[#e10600] text-white shadow-md font-bold"
-                          : "text-gray-400 hover:text-white hover:bg-white/5"
-                      }`}
-                    >
-                      {yr}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="md:col-span-8 relative z-10 h-full flex flex-col justify-center">
-                <span className="text-xs uppercase font-mono text-gray-400 tracking-wider font-bold">ОПИСАНИЕ ИСТОЧНИКА JOLPICA</span>
-                <p className="text-[11px] text-gray-500 leading-relaxed mt-1">
-                  Через Ergast-совместимый интерфейс Jolpica мы тянем живую ведомость набранных очков. Это гарантирует достоверность данных кубков пилотов и конструкторов каждого уикенда, включая текущий календарь чемпионата.
-                </p>
-              </div>
-            </div>
-
-            {/* INTERACTIVE TABLES SPLIT GRID */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              
-              {/* DRIVERS CUP TABLE */}
-              <div className="lg:col-span-5 bg-[#141520] border border-[#212333] rounded-2xl p-5 shadow-lg flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between border-b border-[#212333] pb-3 mb-4">
-                    <h3 className="text-xs font-black uppercase text-white tracking-widest flex items-center gap-2">
-                      <Trophy className="w-4.5 h-4.5 text-[#e10600]" /> Личный зачет пилотов ({jolpicaYear} г.)
-                    </h3>
-                    <span className="text-[9px] bg-[#e10600]/10 text-[#ff3333] border border-[#e10600]/20 px-2 py-0.5 rounded uppercase font-black tracking-wider">
-                      Jolpica Feed
-                    </span>
-                  </div>
-
-                  {standingsLoading ? (
-                    <div className="h-[350px] flex flex-col items-center justify-center gap-2">
-                      <RefreshCw className="w-8 h-8 text-[#e10600] animate-spin" />
-                      <span className="text-xs text-gray-400 font-mono tracking-widest uppercase">Загрузка таблицы пилотов...</span>
-                    </div>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left border-collapse font-mono text-xs">
-                        <thead>
-                          <tr className="border-b border-[#212333] text-gray-500 uppercase text-[9px] tracking-wider font-black">
-                            <th className="py-2.5">Поз</th>
-                            <th>Пилот</th>
-                            <th>Команда</th>
-                            <th className="text-right">Побед</th>
-                            <th className="text-right">Очки</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[#1e202d]">
-                          {standingDrivers.map((item) => (
-                            <tr key={item.position} className="hover:bg-white/5 transition-colors">
-                              <td className="py-3 font-bold text-gray-400">
-                                {item.position === 1 ? "🥇 1" : item.position === 2 ? "🥈 2" : item.position === 3 ? "🥉 3" : item.position}
-                              </td>
-                              <td className="font-sans font-extrabold text-white">
-                                {item.driverName} <span className="text-gray-500 text-[10px] font-mono">({item.driverAcronym})</span>
-                              </td>
-                              <td className="text-gray-400 truncate max-w-[120px]">{item.teamName}</td>
-                              <td className="text-right font-black text-white">{item.wins}</td>
-                              <td className="text-right font-black text-[#e10600]">{item.points}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* CONSTRUCTORS CUP TABLE */}
-              <div className="lg:col-span-4 bg-[#141520] border border-[#212333] rounded-2xl p-5 shadow-lg flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between border-b border-[#212333] pb-3 mb-4">
-                    <h3 className="text-xs font-black uppercase text-white tracking-widest flex items-center gap-2">
-                      <Building className="w-4.5 h-4.5 text-[#e10600]" /> Кубок конструкторов F1 ({jolpicaYear} г.)
-                    </h3>
-                    <span className="text-[9px] bg-[#e10600]/10 text-[#ff3333] border border-[#e10600]/20 px-2 py-0.5 rounded uppercase font-black tracking-wider">
-                      LIVE
-                    </span>
-                  </div>
-
-                  {standingsLoading ? (
-                    <div className="h-[350px] flex flex-col items-center justify-center gap-2">
-                      <RefreshCw className="w-8 h-8 text-[#e10600] animate-spin" />
-                      <span className="text-xs text-gray-400 font-mono tracking-widest uppercase">Загрузка команд...</span>
-                    </div>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left border-collapse font-mono text-xs">
-                        <thead>
-                          <tr className="border-b border-[#212333] text-gray-500 uppercase text-[9px] tracking-wider font-black">
-                            <th className="py-2.5">Поз</th>
-                            <th>Команда</th>
-                            <th className="text-right">Победы</th>
-                            <th className="text-right">Очки</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[#1e202d]">
-                          {standingConstructors.length === 0 ? (
-                            <tr>
-                              <td colSpan={4} className="py-10 text-center text-gray-500 italic">Кубок конструкторов недоступен за этот сезон</td>
-                            </tr>
-                          ) : (
-                            standingConstructors.map((item) => (
-                              <tr key={item.position} className="hover:bg-white/5 transition-colors">
-                                <td className="py-3 font-bold text-gray-400">#{item.position}</td>
-                                <td className="font-sans font-extrabold text-white">{item.teamName} <span className="text-gray-500 text-[10px] block font-mono">{item.nationality}</span></td>
-                                <td className="text-right font-black text-white">{item.wins}</td>
-                                <td className="text-right font-black text-[#e10600]">{item.points}</td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* STAGE CALENDAR RACE WINNERS */}
-              <div className="lg:col-span-3 bg-[#141520] border border-[#212333] rounded-2xl p-5 shadow-lg flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between border-b border-[#212333] pb-3 mb-4">
-                    <h3 className="text-xs font-black uppercase text-white tracking-widest flex items-center gap-1.5">
-                      <Flag className="w-4 h-4 text-[#e10600]" /> Календарь заездов и победители
-                    </h3>
-                  </div>
-
-                  {calendarLoading ? (
-                    <div className="h-[350px] flex flex-col items-center justify-center gap-2">
-                      <RefreshCw className="w-8 h-8 text-[#e10600] animate-spin" />
-                      <span className="text-xs text-gray-400 font-mono tracking-widest uppercase font-black text-center">Извлечение календаря...</span>
-                    </div>
-                  ) : (
-                    <div className="space-y-3 max-h-[360px] overflow-y-auto pr-1">
-                      {seasonRaces.map((gp) => (
-                        <div key={gp.round} className="bg-[#090a0f] p-3 rounded-xl border border-[#212333] flex flex-col justify-between gap-1.5 hover:border-white/10 transition-colors">
-                          <div className="flex justify-between items-center text-[9px] font-mono uppercase font-black">
-                            <span className="text-[#e10600]">Раунд {gp.round}</span>
-                            <span className="text-gray-500">{gp.date}</span>
-                          </div>
-                          <div>
-                            <span className="text-xs font-black text-white block uppercase truncate">{gp.raceName}</span>
-                            <span className="text-[10px] text-gray-500 font-mono flex items-center gap-1 truncate"><MapPin className="w-3 h-3 text-[#e10600]" /> {gp.locality}, {gp.country}</span>
-                          </div>
-                          <div className="mt-1 pt-2 border-t border-[#1a1b24] text-[11px] font-mono flex items-center justify-between">
-                            <span className="text-gray-400">Победитель:</span>
-                            <span className="text-white font-black uppercase text-xs">{gp.winnerAcronym} ({gp.winnerTeam})</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-            </div>
-
-          </div>
-        )}
-
-        {/* ======================================================== */}
-        {/* VIEW 3: FASTF1 TELEMETRY LAP COMPARISON OVERLAY          */}
-        {/* ======================================================== */}
-        {activeTab === "fastf1" && (
-          <div className="grid grid-cols-1 gap-6">
-
-            {/* FASTF1 HEADER BANNER */}
-            <div className="bg-[#151622] p-5 sm:p-6 rounded-2xl border border-[#26283b] relative overflow-hidden shadow-xl">
-              <div className="absolute right-0 top-0 text-[#e10600]/5 text-9xl italic font-black select-none pointer-events-none transform translate-x-10 -translate-y-8 uppercase">
-                FastF1
-              </div>
-              <div className="relative z-10 max-w-4xl space-y-2">
-                <span className="text-[10px] uppercase font-mono tracking-widest text-[#e10600] bg-[#e10600]/10 px-3 py-1 rounded border border-[#e10600]/20 font-black">
-                  FastF1 Telemetry Overlap Simulator
-                </span>
-                <h2 className="text-xl sm:text-2xl font-black italic tracking-tight text-white uppercase mt-2">
-                  Углублённый сравнительный анализ телеметрии двух машин
-                </h2>
-                <p className="text-xs text-gray-400 leading-relaxed font-mono">
-                  Библиотека FastF1 на языке Python является стандартом для разбора перегрузок, графиков дросселя, торможения и усечения траекторий в апексах. Ниже реализован симулятор телеметрии одного полного круга. Выберите двух конкурентов и телеметрический параметр.
-                </p>
-              </div>
-            </div>
-
-            {/* CONTROLLERS SECTOR */}
-            <div className="bg-[#141520] p-5 rounded-xl border border-[#212333] grid grid-cols-1 md:grid-cols-4 gap-4 items-center shadow-lg">
-              
-              {/* Pilot A */}
-              <div className="space-y-1.5 text-xs">
-                <label className="text-gray-400 font-bold block uppercase font-mono">🚙 Пилот №1 (Слева)</label>
-                <select
-                  value={ffDriverA}
-                  onChange={(e) => setFfDriverA(e.target.value)}
-                  className="w-full bg-[#090a0f] border border-[#2d3142] p-2 rounded-lg text-white font-black"
-                >
-                  <option value="Charles Leclerc">Charles Leclerc (Ferrari)</option>
-                  <option value="Max Verstappen">Max Verstappen (Red Bull)</option>
-                  <option value="Lando Norris">Lando Norris (McLaren)</option>
-                  <option value="Lewis Hamilton">Lewis Hamilton (Mercedes)</option>
-                  <option value="Oscar Piastri">Oscar Piastri (McLaren)</option>
-                </select>
-              </div>
-
-              {/* Pilot B */}
-              <div className="space-y-1.5 text-xs">
-                <label className="text-gray-400 font-bold block uppercase font-mono">🚗 Пилот №2 (Справа)</label>
-                <select
-                  value={ffDriverB}
-                  onChange={(e) => setFfDriverB(e.target.value)}
-                  className="w-full bg-[#090a0f] border border-[#2d3142] p-2 rounded-lg text-white font-black"
-                >
-                  <option value="Max Verstappen">Max Verstappen (Red Bull)</option>
-                  <option value="Charles Leclerc">Charles Leclerc (Ferrari)</option>
-                  <option value="Lando Norris">Lando Norris (McLaren)</option>
-                  <option value="Lewis Hamilton">Lewis Hamilton (Mercedes)</option>
-                  <option value="George Russell">George Russell (Mercedes)</option>
-                </select>
-              </div>
-
-              {/* Telemetry Metric parameter */}
-              <div className="space-y-1.5 text-xs">
-                <label className="text-gray-400 font-bold block uppercase font-mono">📊 Телеметрический канал</label>
-                <div className="grid grid-cols-4 gap-1 bg-[#090a0f] p-1 rounded-lg border border-[#2d3142]">
-                  {[
-                    { id: "speed", label: "Скорость" },
-                    { id: "throttle", label: "Газ" },
-                    { id: "brake", label: "Тормоз" },
-                    { id: "gear", label: "Пр" }
-                  ].map((param) => (
-                    <button
-                      key={param.id}
-                      onClick={() => setFfTelemetryParam(param.id as any)}
-                      className={`text-[10px] py-1.5 rounded transition font-bold font-mono text-center ${
-                        ffTelemetryParam === param.id
-                          ? "bg-[#e10600] text-white"
-                          : "text-gray-400 hover:text-white"
-                      }`}
-                    >
-                      {param.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Year for Simulation */}
-              <div className="space-y-1.5 text-xs">
-                <label className="text-gray-400 font-bold block uppercase font-mono">📅 Сезон симуляции FastF1</label>
-                <select
-                  value={fastFFYear}
-                  onChange={(e) => setFastFFYear(Number(e.target.value))}
-                  className="w-full bg-[#090a0f] border border-[#2d3142] p-2 rounded-lg text-white font-black"
-                >
-                  <option value="2026">2026 (Реконструкция шасси)</option>
-                  <option value="2025">2025 (Активные настройки)</option>
-                  <option value="2024">2024 (Аэродинамический профиль)</option>
-                </select>
-              </div>
-
-            </div>
-
-            {/* FASTF1 SIMULATED VISUAL LAP AREA */}
-            <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-stretch">
-              
-              {/* PRIMARY GRAPH AREA */}
-              <div className="xl:col-span-8 bg-[#141520] border border-[#212333] rounded-2xl p-5 shadow-lg flex flex-col justify-between">
-                <div>
-                  <div className="flex justify-between items-center border-b border-[#212333] pb-3 mb-4">
-                    <div>
-                      <h3 className="text-xs font-black uppercase text-white tracking-widest flex items-center gap-1.5 italic">
-                        <Gauge className="w-4 h-4 text-[#e10600]" /> FastF1 Сравнительный оверлей: {ffDriverA} vs {ffDriverB}
-                      </h3>
-                      <p className="text-[10px] text-gray-400 mt-1">Ось X: Дистанция круга в метрах (0 - 5200м). Сектора: старт, извилистый средний сектор, финишная прямая</p>
-                    </div>
-                    <span className="text-[9px] bg-red-600/15 text-red-500 border border-red-500/20 px-2 py-0.5 rounded uppercase font-bold font-mono">
-                      FastF1 calculations
-                    </span>
-                  </div>
-
-                  {isFastF1Generating ? (
-                    <div className="h-[280px] flex flex-col items-center justify-center gap-2">
-                      <RefreshCw className="w-8 h-8 text-[#e10600] animate-spin" />
-                      <span className="text-xs text-gray-400 font-mono tracking-widest uppercase font-black">Координация наложения...</span>
-                    </div>
-                  ) : (
-                    <div className="w-full h-[280px]">
-                      <ResponsiveContainer width="100%" height={280}>
-                        <LineChart
-                          data={ffTelemetryCached}
-                          margin={{ top: 10, right: 10, left: -25, bottom: 5 }}
-                        >
-                          <CartesianGrid stroke={theme === "light" ? "#e5e7eb" : "#1c1d29"} strokeDasharray="3 3" />
-                          <XAxis dataKey="distance" stroke={theme === "light" ? "#4b5563" : "#5d627c"} style={{ fontSize: 9, fontFamily: "monospace" }} />
-                          <YAxis stroke={theme === "light" ? "#4b5563" : "#5d627c"} style={{ fontSize: 9, fontFamily: "monospace" }} domain={["auto", "auto"]} />
-                          <Tooltip
-                            contentStyle={theme === "light" 
-                              ? { backgroundColor: "#ffffff", borderColor: "#e5e7eb", color: "#111827", borderRadius: "10px", boxShadow: "0 4px 10px rgba(0,0,0,0.08)" } 
-                              : { backgroundColor: "#0c0d12", borderColor: "#242637", color: "#ccc", borderRadius: "10px" }
-                            }
-                            itemStyle={theme === "light"
-                              ? { color: "#111827", fontSize: 11, fontFamily: "monospace" }
-                              : { color: "#ccc", fontSize: 11, fontFamily: "monospace" }
-                            }
-                          />
-                          <Legend wrapperStyle={{ fontSize: 10, fontFamily: "sans-serif", color: "#999" }} />
-                          <Line
-                            type="monotone"
-                            dataKey={ffDriverA}
-                            stroke="#e10600"
-                            strokeWidth={3}
-                            dot={false}
-                            activeDot={{ r: 6 }}
-                          />
-                          <Line
-                            type="monotone"
-                            dataKey={ffDriverB}
-                            stroke="#3b82f6"
-                            strokeWidth={3}
-                            dot={false}
-                            activeDot={{ r: 6 }}
-                          />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-                  )}
-                </div>
-
-                {/* Simulated telemetry parameters info */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5 mt-4 pt-4 border-t border-[#212333] text-[10px] font-mono">
-                  <div className="bg-[#090a0f] p-3 rounded-lg border border-[#212333]">
-                    <span className="text-gray-500 block uppercase font-bold">Параметр</span>
-                    <span className="text-white block uppercase text-[11px] font-black mt-1">{ffTelemetryParam}</span>
-                  </div>
-                  <div className="bg-[#090a0f] p-3 rounded-lg border border-[#212333]">
-                    <span className="text-gray-500 block uppercase font-bold">Суммарный зазор</span>
-                    <span className="text-emerald-400 block font-black mt-1">▲ Delta -0.042с</span>
-                  </div>
-                  <div className="bg-[#090a0f] p-3 rounded-lg border border-[#212333]">
-                    <span className="text-gray-500 block uppercase font-bold">Износ шин Sim</span>
-                    <span className="text-white block font-black mt-1">Остаток: 88% / 85%</span>
-                  </div>
-                  <div className="bg-[#090a0f] p-3 rounded-lg border border-[#212333]">
-                    <span className="text-gray-500 block uppercase font-bold">Аэро коэффициент</span>
-                    <span className="text-white block font-black mt-1">DRS-ACTIVE (OK)</span>
-                  </div>
-                </div>
-
-              </div>
-
-              {/* TELEMETRY PYTHON COMPREHENSION REPORT (TERMINAL LOGS STYLE) */}
-              <div className="xl:col-span-4 bg-[#141520] border border-[#212333] rounded-2xl p-5 shadow-lg flex flex-col justify-between">
-                <div>
-                  <div className="flex justify-between items-center border-b border-[#212333] pb-3 mb-4">
-                    <h3 className="text-xs font-black uppercase text-white tracking-widest flex items-center gap-1">
-                      <Radio className="w-4 h-4 text-[#e10600] animate-pulse" /> FastF1 Python Консоль
-                    </h3>
-                  </div>
-
-                  <div className="bg-[#090a0f] p-4 rounded-xl border border-[#212333] font-mono text-[10px] leading-relaxed space-y-2 text-gray-300 max-h-[300px] overflow-y-auto">
-                    <div className="text-[#e10600]">{">>>"} import fastf1 as ff1</div>
-                    <div className="text-gray-500">{">>>"} from fastf1 import plotting</div>
-                    <div className="text-gray-500">{">>>"} ff1.Cache.enable_cache('telemetry_records/')</div>
-                    <div className="text-emerald-400">[INFO] Cache initialized successfully in local storage.</div>
-                    <div>&nbsp;</div>
-                    <div className="text-white">{">>>"} session = ff1.get_session({fastFFYear}, 'Monaco', 'R')</div>
-                    <div className="text-white">{">>>"} session.load()</div>
-                    <div className="text-gray-400">[DEBUG] Loading telemetry streams for {ffDriverA} & {ffDriverB}</div>
-                    <div className="text-gray-400">[DEBUG] Extracted total distance {ffTelemetryCached.length * 130} meters across 12 corners.</div>
-                    <div>&nbsp;</div>
-                    <div className="text-white">{">>>"} # Computing apex speed delta</div>
-                    <div className="text-yellow-400">[REPORT] {ffDriverA} apex speed variance at Turn 6 (Hairpin): -2.5 km/h</div>
-                    <div className="text-[#3b82f6]">[REPORT] {ffDriverB} throttle apply consistency: +4.2% smoother curves</div>
-                    <div className="text-white">{">>>"} # Aero coefficients overlap</div>
-                    <div className="text-emerald-400">[SUCCESS] Comparison traces successfully rendered onto Chart canvas.</div>
-                  </div>
-
-                  <div className="mt-4 p-3 bg-red-600/5 text-xs text-red-200 border border-red-500/30 rounded-xl leading-relaxed">
-                    <strong>Аналитический вывод:</strong> На прямых отрезках трассы болид <strong>{ffDriverA}</strong> демонстрирует минимальное лобовое сопротивление, тогда как <strong>{ffDriverB}</strong> отыгрывает секунды на торможении перед сложными поворотами секторов.
-                  </div>
-                </div>
-
-                <span className="text-[8px] font-mono text-gray-500 text-right mt-3 block">FASTF1-VERSION: 3.1.2 • PYTHON PORTED</span>
-              </div>
-
-            </div>
-
-          </div>
-        )}
-
-        {/* ======================================================== */}
-        {/* VIEW 4: F1DB HISTORICAL ARCHIVES (1950 - PRESENT)         */}
-        {/* ======================================================== */}
-        {activeTab === "f1db" && (
-          <div className="grid grid-cols-1 gap-6">
-
-            {/* F1DB BANNER HEADER */}
-            <div className="bg-[#151622] p-5 sm:p-6 rounded-2xl border border-[#26283b] relative overflow-hidden shadow-xl">
-              <div className="absolute right-0 top-0 text-[#e10600]/5 text-9xl italic font-black select-none pointer-events-none transform translate-x-10 -translate-y-8 uppercase">
-                Historic
-              </div>
-              <div className="relative z-10 max-w-4xl space-y-2">
-                <span className="text-[10px] uppercase font-mono tracking-widest text-[#e10600] bg-[#e10600]/10 px-3 py-1 rounded border border-[#e10600]/20 font-black">
-                  F1DB Global Historic Database (1950 - 2026)
-                </span>
-                <h2 className="text-xl sm:text-2xl font-black italic tracking-tight text-white uppercase mt-2">
-                  Исторические рекорды и чемпионы Формулы-1
-                </h2>
-                <p className="text-xs text-gray-400 leading-relaxed font-mono">
-                  Сводная база данных F1DB собирает рекорды пилотов, команд и трасс, начиная с самого первого Гран-при 1950 года в Сильверстоуне. Воспользуйтесь удобной поисковой строчкой ниже, чтобы моментально отфильтровать чемпионов мира по деталям имени или спортивной команды!
-                </p>
-              </div>
-            </div>
-
-            {/* FILTER SEARCH DECK */}
-            <div className="bg-[#141520] p-5 rounded-2xl border border-[#212333] flex flex-col md:flex-row gap-4 items-center justify-between shadow-lg">
-              
-              {/* Search input */}
-              <div className="w-full md:w-96 relative">
-                <Search className="w-4 h-4 text-gray-500 absolute left-3 top-3.5" />
-                <input
-                  type="text"
-                  placeholder="Поиск по пилоту, команде или году (например, Schumacher)..."
-                  value={f1dbSearchQuery}
-                  onChange={(e) => setF1dbSearchQuery(e.target.value)}
-                  className="w-full bg-[#090a0f] border border-[#2d3142] pl-9 pr-4 py-2.5 text-xs rounded-xl focus:outline-none focus:border-[#e10600] text-white"
-                />
-              </div>
-
-              {/* Mode toggles */}
-              <div className="flex bg-[#090a0f] p-1.5 rounded-xl border border-[#2d3142] w-full md:w-auto">
-                <button
-                  onClick={() => setF1dbCategory("all")}
-                  className={`px-4 py-2 text-xs font-black uppercase rounded-lg transition-all ${
-                    f1dbCategory === "all" ? "bg-[#e10600] text-white" : "text-gray-400 hover:text-white"
-                  }`}
-                >
-                  Все чемпионы
-                </button>
-                <button
-                  onClick={() => setF1dbCategory("drivers")}
-                  className={`px-4 py-2 text-xs font-black uppercase rounded-lg transition-all ${
-                    f1dbCategory === "drivers" ? "bg-[#e10600] text-white" : "text-gray-400 hover:text-white"
-                  }`}
-                >
-                  Только пилоты
-                </button>
-              </div>
-
-            </div>
-
-            {/* F1DB DATA GRID DISPLAY */}
-            <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-stretch">
-              
-              {/* LIST OF HISTORICAL CHAMPIONS */}
-              <div className="xl:col-span-8 bg-[#141520] border border-[#212333] rounded-2xl p-5 shadow-lg flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between border-b border-[#212333] pb-3 mb-4">
-                    <h3 className="text-xs font-black uppercase text-white tracking-widest flex items-center gap-2">
-                      <Trophy className="w-4.5 h-4.5 text-[#e10600]" /> Чемпионы мира Формулы-1 с 1950 по 2025/2026 гг.
-                    </h3>
-                    <span className="text-[10px] font-mono text-gray-400">Найдено записей: {filteredHistoricDrivers.length}</span>
-                  </div>
-
-                  <div className="overflow-x-auto max-h-[400px] overflow-y-auto pr-1">
-                    <table className="w-full text-left border-collapse text-xs font-mono">
-                      <thead>
-                        <tr className="border-b border-[#212333] text-gray-500 uppercase text-[9px] tracking-wider font-extrabold">
-                          <th className="py-2.5">Год</th>
-                          <th>Гонщик</th>
-                          <th>Национальность</th>
-                          <th>Команда / Конструктор</th>
-                          <th className="text-right">Победы</th>
-                          <th className="text-right">Очки</th>
-                          <th className="text-right">% Победы за сезон</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-[#1e202d]">
-                        {filteredHistoricDrivers.length === 0 ? (
-                          <tr>
-                            <td colSpan={7} className="py-10 text-center text-gray-500 italic font-mono text-xs">Записи не найдены при текущем поиске</td>
-                          </tr>
-                        ) : (
-                          filteredHistoricDrivers.map((item) => (
-                            <tr key={item.year} className="hover:bg-white/5 transition-colors">
-                              <td className="py-3 font-extrabold text-[#e10600]">{item.year}</td>
-                              <td className="font-sans font-black text-white text-[13px] flex items-center gap-2.5">
-                                <UserCheck className="w-3.5 h-3.5 text-[#e10600] shrink-0" />
-                                {item.driver}
-                              </td>
-                              <td className="text-gray-400">{item.nationality}</td>
-                              <td className="text-gray-450 font-sans truncate">{item.team}</td>
-                              <td className="text-right font-black text-white">{item.wins}</td>
-                              <td className="text-right font-black text-white">{item.points}</td>
-                              <td className="text-right font-black text-emerald-400">{item.ratio}</td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-
-              {/* F1DB ALL-TIME REVOLUTIONARY RECORDS */}
-              <div className="xl:col-span-4 bg-[#141520] border border-[#212333] rounded-2xl p-5 shadow-lg flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between border-b border-[#212333] pb-3 mb-4">
-                    <h3 className="text-xs font-black uppercase text-white tracking-widest flex items-center gap-1.5">
-                      <Flame className="w-4 h-4 text-[#e10600]" /> Вековые рекорды F1DB
-                    </h3>
-                  </div>
-
-                  <div className="space-y-4 max-h-[410px] overflow-y-auto pr-1">
-                    {ALL_TIME_STATS.map((stat, idx) => (
-                      <div key={idx} className="bg-[#090a0f] p-3.5 rounded-xl border border-[#212333] space-y-1.5">
-                        <div className="flex justify-between items-center text-[9px] font-mono uppercase font-black tracking-wider text-gray-500">
-                          <span>{stat.category}</span>
-                          <span className="text-[#e10600]">HIGHLIGHT</span>
-                        </div>
-                        <span className="text-xs font-bold text-white block uppercase">{stat.title}</span>
-                        <div className="text-sm font-black text-[#e10600] font-mono py-1 block">{stat.holder} — {stat.value}</div>
-                        <p className="text-[11px] text-gray-400 leading-relaxed font-sans">{stat.description}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <span className="text-[8px] font-mono text-gray-600 tracking-wider text-right block mt-3">Дынные получены из F1DB • 1950-2026 Archive</span>
-              </div>
-
-            </div>
-
-          </div>
-        )}
-
       </main>
-
-      {/* FOOTER STATS INFO */}
-      <footer className="bg-black py-6 px-6 border-t border-[#181a24] text-xs">
-        <div className="max-w-[1720px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-gray-500 font-mono select-none">
-          <div className="text-[10px] font-black tracking-widest uppercase italic">
-            F1 METADATA CENTER PRO • ESTABLISHED 1950 - 2026
-          </div>
-          <div className="flex items-center gap-5">
-            <a href="https://openf1.org" target="_blank" rel="noreferrer" className="hover:text-[#e10600] transition">OpenF1 API</a>
-            <span>|</span>
-            <a href="https://jolpica.org" target="_blank" rel="noreferrer" className="hover:text-[#e10600] transition">Jolpica F1 SDK</a>
-            <span>|</span>
-            <a href="#" className="hover:text-[#e10600] transition">FastF1 Visualizer</a>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#e10600] block animate-pulse"></span>
-            <span>SYSTEM STABLE OK</span>
-          </div>
-        </div>
-      </footer>
-
-      {/* 🏎️ COMPARE DRIVERS MODAL */}
-      <AnimatePresence>
-        {isCompareModalOpen && (
-          <div className="fixed inset-0 z-50 overflow-y-auto bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              transition={{ duration: 0.2, ease: "easeOut" }}
-              className="bg-[#141520] border border-[#2c2f44] rounded-2xl w-full max-w-5xl max-h-[92vh] overflow-y-auto flex flex-col shadow-2xl relative"
-            >
-              
-              {/* Header */}
-              <div className="p-5 border-b border-[#212333] flex items-center justify-between bg-gradient-to-r from-[#171825] to-[#141520]">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 bg-[#e10600] flex items-center justify-center rounded">
-                    <Sliders className="w-4 h-4 text-white" />
-                  </div>
-                  <div>
-                    <h2 className="text-xs font-black uppercase text-white tracking-widest leading-none">
-                      Сравнение темпа пилотов
-                    </h2>
-                    <span className="text-[10px] text-gray-500 font-mono block mt-1">
-                      📌 {sessionInfo ? `${sessionInfo.meeting_name} • ${sessionInfo.session_name}` : "Сессия гонок"}
-                    </span>
-                  </div>
-                </div>
-                <button
-                  id="btn-close-modal-x"
-                  onClick={() => setIsCompareModalOpen(false)}
-                  className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-gray-400 hover:text-white transition font-mono text-xs"
-                >
-                  ✕
-                </button>
-              </div>
-
-              {/* Body */}
-              <div className="p-6 space-y-6">
-                
-                {/* Driver Pickers */}
-                <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center bg-[#090a0f] p-4 rounded-xl border border-[#212333]">
-                  
-                  {/* Driver A picker */}
-                  <div className="md:col-span-5 space-y-1.5 text-left">
-                    <label className="text-[9px] uppercase font-black text-gray-400 tracking-wider flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#e10600]"></span> Первый пилот (A)
-                    </label>
-                    <select
-                      id="select-compare-driver-a"
-                      value={compareDriverA?.driver_number || ""}
-                      onChange={(e) => {
-                        const drv = drivers.find(d => d.driver_number === Number(e.target.value));
-                        if (drv) setCompareDriverA(drv);
-                      }}
-                      className="w-full bg-[#141520] border border-[#2a2d41] p-2.5 text-xs font-black text-white rounded-lg focus:outline-none focus:border-[#e10600] cursor-pointer"
-                      style={{ borderLeft: `4px solid ${getTeamColor(compareDriverA?.team_colour || "")}` }}
-                    >
-                      {drivers.map(d => (
-                        <option key={d.driver_number} value={d.driver_number}>
-                          {d.name_acronym} — {d.broadcast_name} ({d.team_name})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* VS Badge */}
-                  <div className="md:col-span-2 flex justify-center py-2 md:py-0">
-                    <div className="w-10 h-10 rounded-full bg-[#e10600]/10 border border-[#e10600]/30 flex items-center justify-center">
-                      <span className="text-xs font-black italic text-[#e10600] tracking-tighter">VS</span>
-                    </div>
-                  </div>
-
-                  {/* Driver B picker */}
-                  <div className="md:col-span-5 space-y-1.5 text-left">
-                    <label className="text-[9px] uppercase font-black text-gray-400 tracking-wider flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#3b82f6]"></span> Второй пилот (B)
-                    </label>
-                    <select
-                      id="select-compare-driver-b"
-                      value={compareDriverB?.driver_number || ""}
-                      onChange={(e) => {
-                        const drv = drivers.find(d => d.driver_number === Number(e.target.value));
-                        if (drv) setCompareDriverB(drv);
-                      }}
-                      className="w-full bg-[#141520] border border-[#2a2d41] p-2.5 text-xs font-black text-white rounded-lg focus:outline-none focus:border-[#e10600] cursor-pointer"
-                      style={{ borderLeft: `4px solid ${getTeamColor(compareDriverB?.team_colour || "")}` }}
-                    >
-                      {drivers.map(d => (
-                        <option key={d.driver_number} value={d.driver_number}>
-                          {d.name_acronym} — {d.broadcast_name} ({d.team_name})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                </div>
-
-                {/* Validation Warning when Teammate or same profile */}
-                {compareDriverA?.driver_number === compareDriverB?.driver_number && (
-                  <div className="bg-yellow-500/10 border border-yellow-500/20 text-yellow-200 p-3 rounded-lg text-[11px] font-mono flex items-center gap-2">
-                    <AlertTriangle className="w-4 h-4 text-yellow-500 shrink-0" />
-                    <span>Выберите разных пилотов для наглядного сравнения и разницы темпа круга!</span>
-                  </div>
-                )}
-
-                {/* ⚔️ HLTV STYLE HIGHLIGHTED STATS BLOCK */}
-                {compareDriverA && compareDriverB && (
-                  <div 
-                    className={`border rounded-2xl overflow-hidden relative transition-all duration-350 ${
-                      theme === "light" 
-                        ? "bg-white border-[#e5e7eb] shadow-lg" 
-                        : "bg-[#141520] border-[#2c2f44] shadow-2xl"
-                    }`}
-                  >
-                    {/* Subtle banner header background decor */}
-                    <div className={`p-4 border-b flex flex-col items-center justify-center text-center relative ${
-                      theme === "light" 
-                        ? "bg-slate-50 border-[#e5e7eb]" 
-                        : "bg-[#0f1019] border-[#212333]"
-                    }`}>
-                      <span className="text-[10px] font-black uppercase text-[#e10600] tracking-widest font-mono">
-                        💥 HIGHLIGHTED STATS // СРАВНЕНИЕ КЛЮЧЕВЫХ ПОКАЗАТЕЛЕЙ
-                      </span>
-                      <span className="text-[9px] text-gray-500 font-mono mt-0.5 uppercase tracking-wide">
-                        {sessionInfo ? `${sessionInfo.meeting_name} • ${sessionInfo.session_name}` : "Сезон 2025/2026"}
-                      </span>
-                    </div>
-
-                    {/* Symmetrical comparison layout */}
-                    <div className="grid grid-cols-1 md:grid-cols-12 items-center p-6 gap-6">
-                      
-                      {/* LEFT: Driver A Profile Card */}
-                      <div className="md:col-span-3 flex flex-col items-center text-center space-y-3">
-                        <div className="relative group">
-                          <div 
-                            className="absolute -inset-1 rounded-full blur-md opacity-25 group-hover:opacity-45 transition duration-300"
-                            style={{ backgroundColor: strokeA }}
-                          />
-                          <div 
-                            className={`relative w-28 h-28 rounded-full overflow-hidden border-2 flex items-center justify-center ${
-                              theme === "light" ? "bg-slate-50" : "bg-[#090a0f]/60"
-                            }`} 
-                            style={{ borderColor: strokeA }}
-                          >
-                            {compareDriverA.headshot_url ? (
-                              <img 
-                                src={compareDriverA.headshot_url} 
-                                alt={compareDriverA.full_name} 
-                                className="w-full h-full object-contain"
-                                referrerPolicy="no-referrer"
-                              />
-                            ) : (
-                              <span className="text-xl font-bold font-mono text-gray-400">{compareDriverA.name_acronym}</span>
-                            )}
-                          </div>
-                        </div>
-
-                        <div>
-                          <h4 className={`text-sm font-black uppercase leading-tight ${theme === "light" ? "text-gray-900" : "text-white"}`}>
-                            {compareDriverA.broadcast_name}
-                          </h4>
-                          <span className="text-[10px] font-mono uppercase font-semibold" style={{ color: strokeA }}>
-                            {compareDriverA.team_name}
-                          </span>
-                        </div>
-
-                        <div className="flex gap-1.5 w-full max-w-[180px]">
-                          <button
-                            onClick={() => {
-                              setSelectedDriver(compareDriverA);
-                              setIsCompareModalOpen(false);
-                            }}
-                            className={`flex-1 text-[10px] py-1.5 px-3 rounded font-black uppercase transition text-center ${
-                              theme === "light" 
-                                ? "bg-gray-100 hover:bg-gray-200 text-gray-800" 
-                                : "bg-white/5 hover:bg-white/10 text-white"
-                            }`}
-                          >
-                            Профиль
-                          </button>
-                          <div 
-                            className="text-[10px] py-1.5 px-2 rounded-md font-mono font-black text-center text-white flex items-center justify-center shrink-0 min-w-[36px]"
-                            style={{ backgroundColor: strokeA }}
-                          >
-                            #{compareDriverA.driver_number}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* CENTER: Symmetrical Stats Comparison list */}
-                      <div className="md:col-span-6 space-y-3">
-                        {[
-                          {
-                            label: "ЛУЧШИЙ КРУГ",
-                            valA: minA ? formatLapTime(minA) : "—",
-                            valB: minB ? formatLapTime(minB) : "—",
-                            isBetterA: minA && minB ? minA < minB : minA ? true : false,
-                            isBetterB: minA && minB ? minB < minA : minB ? true : false,
-                            mono: true
-                          },
-                          {
-                            label: "СРЕДНИЙ ТЕМП (PACE)",
-                            valA: avgA ? formatLapTime(avgA) : "—",
-                            valB: avgB ? formatLapTime(avgB) : "—",
-                            isBetterA: avgA && avgB ? avgA < avgB : avgA ? true : false,
-                            isBetterB: avgA && avgB ? avgB < avgA : avgB ? true : false,
-                            mono: true
-                          },
-                          {
-                            label: "КРУГОВ В СЕССИИ",
-                            valA: compareLapsA.length.toString(),
-                            valB: compareLapsB.length.toString(),
-                            isBetterA: compareLapsA.length > compareLapsB.length,
-                            isBetterB: compareLapsB.length > compareLapsA.length,
-                            mono: true
-                          },
-                          {
-                            label: "МЕСТО В ЧЕМПИОНАТЕ",
-                            valA: getSeasonStatsForDriver(compareDriverA).position !== "—" ? `#${getSeasonStatsForDriver(compareDriverA).position}` : "—",
-                            valB: getSeasonStatsForDriver(compareDriverB).position !== "—" ? `#${getSeasonStatsForDriver(compareDriverB).position}` : "—",
-                            isBetterA: Number(getSeasonStatsForDriver(compareDriverA).position) && Number(getSeasonStatsForDriver(compareDriverB).position) 
-                              ? Number(getSeasonStatsForDriver(compareDriverA).position) < Number(getSeasonStatsForDriver(compareDriverB).position)
-                              : getSeasonStatsForDriver(compareDriverA).position !== "—",
-                            isBetterB: Number(getSeasonStatsForDriver(compareDriverA).position) && Number(getSeasonStatsForDriver(compareDriverB).position)
-                              ? Number(getSeasonStatsForDriver(compareDriverB).position) < Number(getSeasonStatsForDriver(compareDriverA).position)
-                              : getSeasonStatsForDriver(compareDriverB).position !== "—",
-                            mono: true
-                          },
-                          {
-                            label: "ОЧКИ СЕЗОНА",
-                            valA: getSeasonStatsForDriver(compareDriverA).points,
-                            valB: getSeasonStatsForDriver(compareDriverB).points,
-                            isBetterA: Number(getSeasonStatsForDriver(compareDriverA).points) && Number(getSeasonStatsForDriver(compareDriverB).points)
-                              ? Number(getSeasonStatsForDriver(compareDriverA).points) > Number(getSeasonStatsForDriver(compareDriverB).points)
-                              : getSeasonStatsForDriver(compareDriverA).points !== "—",
-                            isBetterB: Number(getSeasonStatsForDriver(compareDriverA).points) && Number(getSeasonStatsForDriver(compareDriverB).points)
-                              ? Number(getSeasonStatsForDriver(compareDriverB).points) > Number(getSeasonStatsForDriver(compareDriverA).points)
-                              : getSeasonStatsForDriver(compareDriverB).points !== "—",
-                            mono: true
-                          },
-                          {
-                            label: "ПОБЕДЫ В СЕЗОНЕ",
-                            valA: getSeasonStatsForDriver(compareDriverA).wins,
-                            valB: getSeasonStatsForDriver(compareDriverB).wins,
-                            isBetterA: Number(getSeasonStatsForDriver(compareDriverA).wins) && Number(getSeasonStatsForDriver(compareDriverB).wins)
-                              ? Number(getSeasonStatsForDriver(compareDriverA).wins) > Number(getSeasonStatsForDriver(compareDriverB).wins)
-                              : getSeasonStatsForDriver(compareDriverA).wins !== "—",
-                            isBetterB: Number(getSeasonStatsForDriver(compareDriverA).wins) && Number(getSeasonStatsForDriver(compareDriverB).wins)
-                              ? Number(getSeasonStatsForDriver(compareDriverB).wins) > Number(getSeasonStatsForDriver(compareDriverA).wins)
-                              : getSeasonStatsForDriver(compareDriverB).wins !== "—",
-                            mono: true
-                          }
-                        ].map((item, index) => (
-                          <div 
-                            key={index} 
-                            className={`grid grid-cols-12 items-center gap-2 py-2 border-b last:border-0 last:pb-0 ${
-                              theme === "light" ? "border-gray-100" : "border-white/5"
-                            }`}
-                          >
-                            {/* Value A */}
-                            <div className="col-span-4 text-left">
-                              <span 
-                                className={`text-[13px] tracking-tight ${item.mono ? "font-mono" : "font-sans"} ${
-                                  item.isBetterA 
-                                    ? "font-black" 
-                                    : "text-gray-450 font-medium opacity-50"
-                                }`}
-                                style={item.isBetterA ? { color: strokeA } : {}}
-                              >
-                                {item.valA}
-                              </span>
-                            </div>
-
-                            {/* Label */}
-                            <div className="col-span-4 text-center">
-                              <span className="text-[8px] font-black uppercase text-gray-400 tracking-wider block">
-                                {item.label}
-                              </span>
-                            </div>
-
-                            {/* Value B */}
-                            <div className="col-span-4 text-right">
-                              <span 
-                                className={`text-[13px] tracking-tight ${item.mono ? "font-mono" : "font-sans"} ${
-                                  item.isBetterB 
-                                    ? "font-black" 
-                                    : "text-gray-450 font-medium opacity-50"
-                                }`}
-                                style={item.isBetterB ? { color: strokeB } : {}}
-                              >
-                                {item.valB}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* RIGHT: Driver B Profile Card */}
-                      <div className="md:col-span-3 flex flex-col items-center text-center space-y-3">
-                        <div className="relative group">
-                          <div 
-                            className="absolute -inset-1 rounded-full blur-md opacity-25 group-hover:opacity-45 transition duration-300"
-                            style={{ backgroundColor: strokeB }}
-                          />
-                          <div 
-                            className={`relative w-28 h-28 rounded-full overflow-hidden border-2 flex items-center justify-center ${
-                              theme === "light" ? "bg-slate-50" : "bg-[#090a0f]/60"
-                            }`} 
-                            style={{ borderColor: strokeB }}
-                          >
-                            {compareDriverB.headshot_url ? (
-                              <img 
-                                src={compareDriverB.headshot_url} 
-                                alt={compareDriverB.full_name} 
-                                className="w-full h-full object-contain"
-                                referrerPolicy="no-referrer"
-                              />
-                            ) : (
-                              <span className="text-xl font-bold font-mono text-gray-400">{compareDriverB.name_acronym}</span>
-                            )}
-                          </div>
-                        </div>
-
-                        <div>
-                          <h4 className={`text-sm font-black uppercase leading-tight ${theme === "light" ? "text-gray-900" : "text-white"}`}>
-                            {compareDriverB.broadcast_name}
-                          </h4>
-                          <span className="text-[10px] font-mono uppercase font-semibold" style={{ color: strokeB }}>
-                            {compareDriverB.team_name}
-                          </span>
-                        </div>
-
-                        <div className="flex gap-1.5 w-full max-w-[180px]">
-                          <button
-                            onClick={() => {
-                              setSelectedDriver(compareDriverB);
-                              setIsCompareModalOpen(false);
-                            }}
-                            className={`flex-1 text-[10px] py-1.5 px-3 rounded font-black uppercase transition text-center ${
-                              theme === "light" 
-                                ? "bg-gray-100 hover:bg-gray-200 text-gray-800" 
-                                : "bg-white/5 hover:bg-white/10 text-white"
-                            }`}
-                          >
-                            Профиль
-                          </button>
-                          <div 
-                            className="text-[10px] py-1.5 px-2 rounded-md font-mono font-black text-center text-white flex items-center justify-center shrink-0 min-w-[36px]"
-                            style={{ backgroundColor: strokeB }}
-                          >
-                            #{compareDriverB.driver_number}
-                          </div>
-                        </div>
-                      </div>
-
-                    </div>
-                  </div>
-                )}
-
-                {/* Main Graph & Comparative Dashboard */}
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-                  
-                  {/* Graph */}
-                  <div className="lg:col-span-8 bg-[#10111a] border border-[#212333] rounded-xl p-5 flex flex-col justify-between">
-                    <div>
-                      <h3 className="text-xs font-black uppercase text-white tracking-widest mb-3 flex items-center gap-1.5">
-                        <Activity className="w-4 h-4 text-[#e10600]" /> Совмещенный график кругов
-                      </h3>
-                      
-                      {isCompareLoading ? (
-                        <div className="h-[280px] flex flex-col items-center justify-center gap-3">
-                          <RefreshCw className="w-8 h-8 text-[#e10600] animate-spin" />
-                          <span className="text-[10px] text-gray-400 font-mono tracking-widest uppercase">Запрос телеметрии пилотов...</span>
-                        </div>
-                      ) : compareLapsA.length === 0 && compareLapsB.length === 0 ? (
-                        <div className="h-[280px] flex flex-col items-center justify-center text-center text-gray-500 text-xs">
-                          <Info className="w-8 h-8 mb-2" />
-                          <span>Данные кругов отсутствуют для выбранной пары.</span>
-                        </div>
-                      ) : (
-                        <div className="w-full h-[285px]">
-                          <ResponsiveContainer width="100%" height={285}>
-                            <LineChart
-                              data={combinedChartData}
-                              margin={{ top: 10, right: 10, left: -25, bottom: 5 }}
-                            >
-                              <CartesianGrid stroke={theme === "light" ? "#e5e7eb" : "#1c1d29"} strokeDasharray="3 3" />
-                              <XAxis dataKey="lap" stroke={theme === "light" ? "#4b5563" : "#5d627c"} style={{ fontSize: 9, fontFamily: "monospace" }} />
-                              <YAxis stroke={theme === "light" ? "#4b5563" : "#5d627c"} style={{ fontSize: 9, fontFamily: "monospace" }} domain={["auto", "auto"]} />
-                              <Tooltip
-                                contentStyle={theme === "light" 
-                                  ? { backgroundColor: "#ffffff", borderColor: "#e5e7eb", color: "#111827", borderRadius: "10px", boxShadow: "0 4px 10px rgba(0,0,0,0.08)" } 
-                                  : { backgroundColor: "#0c0d12", borderColor: "#242637", color: "#ccc", borderRadius: "10px" }
-                                }
-                                itemStyle={theme === "light"
-                                  ? { color: "#111827", fontSize: 11, fontFamily: "monospace" }
-                                  : { color: "#ccc", fontSize: 11, fontFamily: "monospace" }
-                                }
-                              />
-                              <Legend wrapperStyle={{ fontSize: 10, fontFamily: "monospace", paddingTop: 10 }} />
-                              <Line
-                                type="monotone"
-                                dataKey={compareDriverA?.name_acronym || "Driver A"}
-                                stroke={strokeA}
-                                strokeWidth={3}
-                                dot={{ r: 4, stroke: "#0b0c10", strokeWidth: 1.5 }}
-                                activeDot={{ r: 6 }}
-                                connectNulls
-                              />
-                              <Line
-                                type="monotone"
-                                dataKey={compareDriverB?.name_acronym || "Driver B"}
-                                stroke={strokeB}
-                                strokeWidth={3}
-                                dot={{ r: 4, stroke: "#0b0c10", strokeWidth: 1.5 }}
-                                activeDot={{ r: 6 }}
-                                connectNulls
-                              />
-                            </LineChart>
-                          </ResponsiveContainer>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Side comparison stats board */}
-                  <div className="lg:col-span-4 flex flex-col gap-4 justify-between">
-                    
-                    {/* Driver A stats card */}
-                    <div className="bg-[#0e0f17] border border-[#212333] p-4 rounded-xl space-y-3 relative overflow-hidden" style={{ borderLeft: `4px solid ${strokeA}` }}>
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs font-black text-white uppercase truncate max-w-[130px]">{compareDriverA?.broadcast_name || "Driver A"}</span>
-                        <span className="text-[10px] font-mono text-gray-400 bg-white/5 py-0.5 px-2 rounded">{compareDriverA?.name_acronym}</span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2 text-center text-xs font-mono">
-                        <div className="bg-[#05060a] p-2 rounded">
-                          <span className="text-[8px] text-gray-500 uppercase block">Рекорд</span>
-                          <span className="text-white font-bold text-xs">{formatLapTime(minA)}</span>
-                        </div>
-                        <div className="bg-[#05060a] p-2 rounded">
-                          <span className="text-[8px] text-gray-500 uppercase block">Средний Pace</span>
-                          <span className="text-white font-bold text-[10px]">{formatLapTime(avgA)}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Driver B stats card */}
-                    <div className="bg-[#0e0f17] border border-[#212333] p-4 rounded-xl space-y-3 relative overflow-hidden" style={{ borderLeft: `4px solid ${strokeB}` }}>
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs font-black text-white uppercase truncate max-w-[130px]">{compareDriverB?.broadcast_name || "Driver B"}</span>
-                        <span className="text-[10px] font-mono text-gray-400 bg-white/5 py-0.5 px-2 rounded">{compareDriverB?.name_acronym}</span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2 text-center text-xs font-mono">
-                        <div className="bg-[#05060a] p-2 rounded">
-                          <span className="text-[8px] text-gray-500 uppercase block">Рекорд</span>
-                          <span className="text-white font-bold text-xs">{formatLapTime(minB)}</span>
-                        </div>
-                        <div className="bg-[#05060a] p-2 rounded">
-                          <span className="text-[8px] text-gray-500 uppercase block">Средний Pace</span>
-                          <span className="text-white font-bold text-[10px]">{formatLapTime(avgB)}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Delta comparison board */}
-                    <div className="bg-gradient-to-br from-[#1b1c2b] to-[#141520] border border-[#2d3142] p-4 rounded-xl flex-grow flex flex-col justify-center text-center space-y-2">
-                      <span className="text-[9px] uppercase font-black text-[#e10600] tracking-widest font-mono">Анализ разницы темпа</span>
-                      {minA && minB ? (
-                        <div className="space-y-1">
-                          <div className="text-xs font-black text-white uppercase tracking-tight">
-                            {minA < minB ? (
-                              <span>🏆 {compareDriverA?.name_acronym} быстрее на <span className="text-emerald-400 font-mono">{(minB - minA).toFixed(3)}с</span></span>
-                            ) : minA > minB ? (
-                              <span>🏆 {compareDriverB?.name_acronym} быстрее на <span className="text-emerald-400 font-mono">{(minA - minB).toFixed(3)}с</span></span>
-                            ) : (
-                              <span>Время рекордов совпадает!</span>
-                            )}
-                          </div>
-                          <p className="text-[10px] text-gray-400 leading-normal font-sans">
-                            Разница по лучшим кругам. Сравнение среднего гоночного темпа: {avgA && avgB ? (
-                              `${compareDriverA?.name_acronym} (${formatLapTime(avgA)}) vs ${compareDriverB?.name_acronym} (${formatLapTime(avgB)})`
-                            ) : "—"}
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="text-xs text-gray-500 font-bold">Один из пилотов не имеет завершенных кругов в сессии</div>
-                      )}
-                    </div>
-
-                  </div>
-
-                </div>
-
-              </div>
-
-              {/* Footer */}
-              <div className="p-4 border-t border-[#212333] flex justify-end gap-3 bg-[#0d0e15]">
-                <button
-                  id="btn-close-compare-modal-footer"
-                  onClick={() => setIsCompareModalOpen(false)}
-                  className="px-5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-white font-black text-xs uppercase tracking-wider transition"
-                >
-                  Закрыть
-                </button>
-              </div>
-
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
     </div>
   );
+}
+
+function ResultsTab({ race, top3, issueCountByDriver, setSelectedDriverNumber, setActiveTab }: any) {
+  return (
+    <section className="grid gap-6">
+      <div className="grid gap-4 md:grid-cols-3">
+        {top3.map((driver: Driver, index: number) => (
+          <div key={driver.driver_number} className="rounded-3xl border border-white/10 bg-[#151720] p-5 shadow-xl">
+            <div className="text-xs font-black uppercase tracking-[0.25em] text-[#e10600]">{index + 1} место</div>
+            <div className="mt-3 flex items-center gap-4">
+              <img src={driver.headshot_url || ""} alt="" className="h-16 w-16 rounded-2xl bg-black/40 object-cover" />
+              <div>
+                <div className="text-xl font-black text-white">{driver.full_name}</div>
+                <div className="text-sm" style={{ color: teamColor(driver.team_colour) }}>{driver.team_name}</div>
+                <div className="mt-1 text-xs text-zinc-500">Финиш: {finishTimeDisplay(driver)} • Лучший круг: {bestLapDisplay(driver)}</div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="overflow-hidden rounded-3xl border border-white/10 bg-[#11131b]">
+        <div className="border-b border-white/10 p-5">
+          <h3 className="text-xl font-black text-white">Итог гонки</h3>
+          <p className="mt-1 text-sm text-zinc-400">Финишное время и лучший круг берутся из OpenF1, а если их нет — дополняются историческими результатами Jolpica.</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1100px] text-left text-sm">
+            <thead className="bg-black/30 text-xs uppercase tracking-widest text-zinc-500">
+              <tr>
+                <th className="px-4 py-3">Место</th>
+                <th className="px-4 py-3">Пилот</th>
+                <th className="px-4 py-3">Команда</th>
+                <th className="px-4 py-3">Старт</th>
+                <th className="px-4 py-3">Финиш / отставание</th>
+                <th className="px-4 py-3">Лучший круг</th>
+                <th className="px-4 py-3">Круги</th>
+                <th className="px-4 py-3">Статус</th>
+                <th className="px-4 py-3">Проблемы</th>
+              </tr>
+            </thead>
+            <tbody>
+              {race.drivers.map((driver: Driver) => (
+                <tr key={driver.driver_number} className="border-t border-white/5 hover:bg-white/[0.03]">
+                  <td className="px-4 py-3 font-black text-white">{positionText(driver.finishing_position)}</td>
+                  <td className="px-4 py-3">
+                    <button onClick={() => { setSelectedDriverNumber(driver.driver_number); setActiveTab("driver"); }} className="flex items-center gap-3 text-left hover:text-white">
+                      <img src={driver.headshot_url || ""} alt="" className="h-10 w-10 rounded-xl bg-black/40 object-cover" />
+                      <span><span className="block font-bold text-white">{driver.full_name}</span><span className="text-xs text-zinc-500">#{driver.driver_number} • {driver.name_acronym}</span></span>
+                    </button>
+                  </td>
+                  <td className="px-4 py-3 font-bold" style={{ color: teamColor(driver.team_colour) }}>{driver.team_name}</td>
+                  <td className="px-4 py-3">{positionText(driver.starting_position)}</td>
+                  <td className="px-4 py-3 font-bold text-white">{finishTimeDisplay(driver)}</td>
+                  <td className="px-4 py-3">{bestLapDisplay(driver)}</td>
+                  <td className="px-4 py-3">{positionText(driver.classified_laps)}</td>
+                  <td className="px-4 py-3 text-xs text-zinc-400">{statusLabel(driver)}</td>
+                  <td className="px-4 py-3">{issueCountByDriver.get(driver.driver_number) || 0}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MapTab({ race }: any) {
+  return <section className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><h3 className="flex items-center gap-2 text-xl font-black text-white"><MapIcon className="h-5 w-5 text-[#e10600]" /> Карта трассы</h3><p className="mt-1 text-sm text-zinc-400">OpenF1 отдаёт x/y/z координаты машин, это не географическая карта.</p>{race.track_map?.points?.length ? <div className="mt-5 rounded-3xl border border-white/10 bg-black p-4"><svg viewBox="0 0 100 100" className="h-[520px] w-full"><polyline points={race.track_map.points.map((point: any) => `${point.x},${point.y}`).join(" ")} fill="none" stroke="#e10600" strokeWidth="0.65" strokeLinecap="round" strokeLinejoin="round" />{race.track_map.points.filter((_: any, index: number) => index % 80 === 0).map((point: any, index: number) => <circle key={`${point.date}-${index}`} cx={point.x} cy={point.y} r="0.65" fill="#ffffff" opacity="0.45" />)}</svg><p className="mt-3 text-xs text-zinc-500">Источник линии: {race.track_map.source_driver_name || "пилот не указан"}. {race.track_map.note}</p></div> : <EmptyBlock title="Карта недоступна" text={race.track_map?.note || "OpenF1 не вернул location-координаты для этой сессии."} />}</section>;
+}
+
+function DriverTab({ race, selectedDriverNumber, selectedDriver, selectedDriverLaps, setSelectedDriverNumber }: any) {
+  return <section className="grid gap-6 lg:grid-cols-[320px_1fr]"><div className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><label className="mb-2 block text-xs font-bold uppercase tracking-widest text-zinc-500">Пилот</label><select value={selectedDriverNumber} onChange={(event) => setSelectedDriverNumber(Number(event.target.value))} className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm font-bold text-white outline-none focus:border-[#e10600]">{race.drivers.map((driver: Driver) => <option key={driver.driver_number} value={driver.driver_number}>{driver.full_name}</option>)}</select>{selectedDriver && <div className="mt-5"><img src={selectedDriver.headshot_url || ""} alt="" className="h-40 w-full rounded-3xl bg-black/40 object-contain" /><h3 className="mt-4 text-2xl font-black text-white">{selectedDriver.full_name}</h3><p className="font-bold" style={{ color: teamColor(selectedDriver.team_colour) }}>{selectedDriver.team_name}</p><div className="mt-4 grid grid-cols-2 gap-3 text-sm"><StatCard title="Финиш" value={positionText(selectedDriver.finishing_position)} /><StatCard title="Старт" value={positionText(selectedDriver.starting_position)} /><StatCard title="Время финиша" value={finishTimeDisplay(selectedDriver)} /><StatCard title="Лучший круг" value={bestLapDisplay(selectedDriver)} /><StatCard title="Круги" value={selectedDriver.classified_laps ?? "—"} /><StatCard title="Пит-стопы" value={selectedDriver.pit_stop_count ?? 0} /></div></div>}</div>{selectedDriver ? <div className="grid gap-6"><div className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><h3 className="flex items-center gap-2 text-xl font-black text-white"><Gauge className="h-5 w-5 text-[#e10600]" /> Круги пилота</h3>{selectedDriverLaps.length ? <div className="mt-4 h-80"><ResponsiveContainer width="100%" height="100%"><LineChart data={selectedDriverLaps}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" /><XAxis dataKey="lap" stroke="#a1a1aa" /><YAxis stroke="#a1a1aa" domain={["dataMin - 1", "dataMax + 1"]} /><Tooltip contentStyle={{ background: "#11131b", border: "1px solid #333", borderRadius: 12 }} /><Line type="monotone" dataKey="lap_time" stroke={teamColor(selectedDriver.team_colour)} dot={false} strokeWidth={2} /></LineChart></ResponsiveContainer></div> : <EmptyBlock title="Круги недоступны" text="OpenF1 не вернул lap_duration по этому пилоту. Итоговые данные и лучший круг могут быть взяты из исторического fallback." />}</div><div className="grid gap-6 lg:grid-cols-2"><SimpleList title="Пит-стопы" icon={<Wrench className="h-5 w-5 text-[#e10600]" />} items={selectedDriver.pit_stops || []} empty="OpenF1 не вернул pit-данные по этому пилоту." render={(pit: any, index: number) => <div key={index} className="rounded-2xl bg-white/[0.03] p-3 text-sm"><div className="font-bold text-white">Круг {pit.lap_number ?? "—"}</div><div className="text-zinc-400">Остановка: {displayTime(pit.stop_duration)} • пит-лейн: {displayTime(pit.lane_duration)}</div></div>} /><SimpleList title="Шины" icon={<Activity className="h-5 w-5 text-[#e10600]" />} items={selectedDriver.stints || []} empty="OpenF1 не вернул stints по этому пилоту." render={(stint: any) => <div key={stint.stint_number} className="rounded-2xl bg-white/[0.03] p-3 text-sm"><div className="font-bold text-white">{stint.compound}</div><div className="text-zinc-400">Круги {stint.lap_start ?? "—"}–{stint.lap_end ?? "—"}, возраст шин: {stint.tyre_age_at_start ?? "—"}</div></div>} /></div></div> : <EmptyBlock title="Пилот не выбран" text="Выберите пилота из списка." />}</section>;
+}
+
+function SimpleList({ title, icon, items, empty, render }: any) {
+  return <div className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><h3 className="flex items-center gap-2 text-lg font-black text-white">{icon} {title}</h3><div className="mt-4 space-y-2">{items.length ? items.map(render) : <EmptyBlock title="Нет данных" text={empty} />}</div></div>;
+}
+
+function CompareTab({ race, compareA, compareB, compareDriverA, compareDriverB, compareChart, issueCountByDriver, setCompareA, setCompareB }: any) {
+  return <section className="grid gap-6"><div className="grid gap-4 md:grid-cols-2"><select value={compareA} onChange={(event) => setCompareA(Number(event.target.value))} className="rounded-2xl border border-white/10 bg-[#11131b] px-4 py-3 text-sm font-bold text-white outline-none focus:border-[#e10600]">{race.drivers.map((driver: Driver) => <option key={driver.driver_number} value={driver.driver_number}>{driver.full_name}</option>)}</select><select value={compareB} onChange={(event) => setCompareB(Number(event.target.value))} className="rounded-2xl border border-white/10 bg-[#11131b] px-4 py-3 text-sm font-bold text-white outline-none focus:border-[#e10600]">{race.drivers.map((driver: Driver) => <option key={driver.driver_number} value={driver.driver_number}>{driver.full_name}</option>)}</select></div>{compareDriverA && compareDriverB ? <><div className="overflow-hidden rounded-3xl border border-white/10 bg-[#11131b]"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-black/30 text-xs uppercase tracking-widest text-zinc-500"><tr><th className="px-4 py-3">Показатель</th><th className="px-4 py-3">{compareDriverA.full_name}</th><th className="px-4 py-3">{compareDriverB.full_name}</th></tr></thead><tbody>{[["Финиш", positionText(compareDriverA.finishing_position), positionText(compareDriverB.finishing_position)], ["Время финиша", finishTimeDisplay(compareDriverA), finishTimeDisplay(compareDriverB)], ["Старт", positionText(compareDriverA.starting_position), positionText(compareDriverB.starting_position)], ["Изменение позиции", compareDriverA.position_delta ?? "—", compareDriverB.position_delta ?? "—"], ["Лучший круг", bestLapDisplay(compareDriverA), bestLapDisplay(compareDriverB)], ["Средний круг", displayTime(compareDriverA.average_lap), displayTime(compareDriverB.average_lap)], ["Медианный круг", displayTime(compareDriverA.median_lap), displayTime(compareDriverB.median_lap)], ["Пит-стопы", compareDriverA.pit_stop_count ?? 0, compareDriverB.pit_stop_count ?? 0], ["Средний пит-стоп", displayTime(compareDriverA.average_pit_stop), displayTime(compareDriverB.average_pit_stop)], ["Проблемные моменты", issueCountByDriver.get(compareDriverA.driver_number) || 0, issueCountByDriver.get(compareDriverB.driver_number) || 0]].map((row) => <tr key={String(row[0])} className="border-t border-white/5"><td className="px-4 py-3 font-bold text-zinc-300">{row[0]}</td><td className="px-4 py-3 text-white">{row[1]}</td><td className="px-4 py-3 text-white">{row[2]}</td></tr>)}</tbody></table></div>{compareChart.length ? <div className="h-96 rounded-3xl border border-white/10 bg-[#11131b] p-5"><ResponsiveContainer width="100%" height="100%"><LineChart data={compareChart}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" /><XAxis dataKey="lap" stroke="#a1a1aa" /><YAxis stroke="#a1a1aa" domain={["dataMin - 1", "dataMax + 1"]} /><Tooltip contentStyle={{ background: "#11131b", border: "1px solid #333", borderRadius: 12 }} /><Legend /><Line type="monotone" dataKey={compareDriverA.name_acronym || "A"} stroke={teamColor(compareDriverA.team_colour)} dot={false} strokeWidth={2} /><Line type="monotone" dataKey={compareDriverB.name_acronym || "B"} stroke={teamColor(compareDriverB.team_colour)} dot={false} strokeWidth={2} /></LineChart></ResponsiveContainer></div> : <EmptyBlock title="График недоступен" text="OpenF1 не вернул круги для сравнения этих пилотов. Таблица выше всё равно сравнивает исторический итог гонки." />}</> : <EmptyBlock title="Выберите двух пилотов" text="После выбора сайт сравнит позиции, время финиша, лучший круг и проблемные моменты." />}</section>;
+}
+
+function IssuesTab({ race }: any) {
+  return <section className="grid gap-4"><div className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><h3 className="text-xl font-black text-white">Проблемные моменты гонки</h3><p className="mt-1 text-sm text-zinc-400">Это не обвинения. Блок строится по Race Control, DNF/DNS/DSQ, потере позиций и медленным пит-стопам.</p></div>{race.issues?.length ? race.issues.map((issue: any, index: number) => <div key={`${issue.driver_number}-${index}`} className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="text-lg font-black text-white">{issue.driver_name || `Пилот #${issue.driver_number}`}</div><div className="text-sm text-zinc-400">{issue.team_name} • {issue.type} • {issue.source}</div></div><span className={`rounded-full px-3 py-1 text-xs font-black uppercase ${issue.severity === "high" ? "bg-red-500/15 text-red-300" : "bg-yellow-500/15 text-yellow-300"}`}>{issue.severity}</span></div><p className="mt-3 text-sm text-zinc-300">{issue.message}</p>{issue.lap_number && <p className="mt-2 text-xs text-zinc-500">Круг: {issue.lap_number}</p>}</div>) : <EmptyBlock title="Проблемных моментов не найдено" text="OpenF1 не вернул событий, которые анализатор мог бы отметить как проблемные." />}</section>;
+}
+
+function ChatTab({ chatInput, chatMessages, chatLoading, setChatInput, sendChatMessage }: any) {
+  return <section className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><h3 className="flex items-center gap-2 text-xl font-black text-white"><MessageSquare className="h-5 w-5 text-[#e10600]" /> GigaChat по гонке</h3><p className="mt-1 text-sm text-zinc-400">Чат отвечает по выбранной гонке в целом: победитель, топ-3, финишное время, лучший круг, сходы и объяснения терминов.</p><div className="mt-4 flex flex-wrap gap-2">{QUICK_PROMPTS.map((prompt) => <button key={prompt} onClick={() => sendChatMessage(prompt)} disabled={chatLoading} className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-bold text-zinc-300 hover:bg-white/[0.08] disabled:opacity-50">{prompt}</button>)}</div><div className="mt-5 flex h-[420px] flex-col gap-3 overflow-y-auto rounded-2xl border border-white/10 bg-black/30 p-4">{chatMessages.length === 0 && <div className="text-sm text-zinc-500">Задай вопрос по гонке или нажми одну из быстрых кнопок выше.</div>}{chatMessages.map((message: ChatMessage, index: number) => <div key={index} className={`max-w-[85%] whitespace-pre-line rounded-2xl p-3 text-sm ${message.role === "user" ? "ml-auto bg-[#e10600] text-white" : "bg-white/[0.06] text-zinc-200"}`}>{message.text}{message.provider && <div className="mt-2 text-[10px] uppercase tracking-widest text-zinc-500">{message.provider}</div>}</div>)}{chatLoading && <div className="max-w-[85%] rounded-2xl bg-white/[0.06] p-3 text-sm text-zinc-400">ИИ думает...</div>}</div><div className="mt-4 flex gap-3"><input value={chatInput} onChange={(event) => setChatInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && sendChatMessage()} className="flex-1 rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none focus:border-[#e10600]" placeholder="Спроси про гонку, а не только про одного пилота..." /><button onClick={() => sendChatMessage()} disabled={!chatInput.trim() || chatLoading} className="rounded-2xl bg-[#e10600] px-5 text-xs font-black uppercase tracking-widest text-white disabled:opacity-50">Отправить</button></div></section>;
+}
+
+function DataTab({ race }: any) {
+  return <section className="grid gap-6 lg:grid-cols-2"><div className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><h3 className="flex items-center gap-2 text-xl font-black text-white"><Database className="h-5 w-5 text-[#e10600]" /> Доступность данных</h3><div className="mt-4 grid gap-2 text-sm">{Object.entries(race.data_quality || {}).map(([key, value]) => <div key={key} className="flex items-center justify-between gap-4 rounded-2xl bg-white/[0.03] px-3 py-2"><span className="text-zinc-400">{key}</span><span className="text-right font-bold text-white">{String(value)}</span></div>)}</div></div><div className="rounded-3xl border border-white/10 bg-[#11131b] p-5"><h3 className="flex items-center gap-2 text-xl font-black text-white"><CloudSun className="h-5 w-5 text-[#e10600]" /> Погода</h3>{race.weather?.length ? <div className="mt-4 h-80"><ResponsiveContainer width="100%" height="100%"><LineChart data={race.weather.map((item: any) => ({ time: new Date(item.date).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }), air: item.air_temperature, track: item.track_temperature, humidity: item.humidity }))}><CartesianGrid strokeDasharray="3 3" stroke="#27272a" /><XAxis dataKey="time" stroke="#a1a1aa" /><YAxis stroke="#a1a1aa" /><Tooltip contentStyle={{ background: "#11131b", border: "1px solid #333", borderRadius: 12 }} /><Legend /><Line type="monotone" dataKey="air" stroke="#60a5fa" dot={false} /><Line type="monotone" dataKey="track" stroke="#f97316" dot={false} /><Line type="monotone" dataKey="humidity" stroke="#22c55e" dot={false} /></LineChart></ResponsiveContainer></div> : <EmptyBlock title="Погода недоступна" text="OpenF1 не вернул weather для этой сессии." />}</div></section>;
 }
