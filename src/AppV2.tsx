@@ -272,7 +272,7 @@ export default function App() {
             <div className="grid h-12 w-12 place-items-center rounded-2xl bg-[#e10600] text-xl font-black italic">F1</div>
             <div>
               <h1 className="text-xl font-black uppercase">F1 Race Analytics</h1>
-              <p className="text-xs text-zinc-400">OpenF1 + Jolpica API • локальный кэш • без фейковых данных</p>
+              <p className="text-xs text-zinc-400">OpenF1 + Jolpica API</p>
             </div>
           </div>
           <nav className="flex gap-2 overflow-x-auto rounded-2xl border border-white/10 bg-black/30 p-1">
@@ -313,7 +313,6 @@ export default function App() {
                 <p className="mt-2 text-sm text-zinc-400">{race.session.location}, {race.session.country_name} • {dateText(race.session.date_start)}</p>
                 <div className="mt-4 flex flex-wrap gap-2 text-xs font-bold">
                   <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-emerald-300">API-данные</span>
-                  <span className="rounded-full bg-blue-500/10 px-3 py-1 text-blue-300">без моков</span>
                   <span className="rounded-full bg-white/5 px-3 py-1 text-zinc-300">кругов: {race.laps?.length || 0}</span>
                   <span className="rounded-full bg-white/5 px-3 py-1 text-zinc-300">питов: {race.pit_stops?.length || 0}</span>
                 </div>
@@ -344,7 +343,7 @@ function Overview({ race, drivers, setTab, setSelectedDriver }: any) {
         {top3.map((driver: Driver, index: number) => <div key={driver.driver_number} className="rounded-3xl border border-white/10 bg-[#151720] p-5"><div className="text-xs font-black uppercase tracking-[0.25em] text-[#e10600]">{index + 1} место</div><div className="mt-4 flex items-center gap-4"><img src={driver.headshot_url || ""} className="h-16 w-16 rounded-2xl bg-black/40 object-cover" /><div><div className="text-xl font-black">{driver.full_name}</div><div style={{ color: teamColor(driver.team_colour) }} className="text-sm font-bold">{driver.team_name}</div><div className="mt-1 text-xs text-zinc-500">{finishDisplay(driver, race)} • лучший круг: {bestLapDisplay(driver)}</div></div></div></div>)}
       </div>
       <div className="overflow-hidden rounded-3xl border border-white/10 bg-[#11131b]">
-        <div className="border-b border-white/10 p-5"><h3 className="text-xl font-black">Итог гонки</h3><p className="mt-1 text-sm text-zinc-400">Время показывается нормально: победитель — полное время, остальные — отставание.</p></div>
+        <div className="border-b border-white/10 p-5"><h3 className="text-xl font-black">Итог гонки</h3><p className="mt-1 text-sm text-zinc-400">победитель — полное время, остальные — отставание.</p></div>
         <div className="overflow-x-auto"><table className="w-full min-w-[1050px] text-left text-sm"><thead className="bg-black/30 text-xs uppercase tracking-widest text-zinc-500"><tr><th className="px-4 py-3">Место</th><th className="px-4 py-3">Пилот</th><th className="px-4 py-3">Команда</th><th className="px-4 py-3">Старт</th><th className="px-4 py-3">Финиш</th><th className="px-4 py-3">Лучший круг</th><th className="px-4 py-3">Круги</th><th className="px-4 py-3">Пит-стопы</th><th className="px-4 py-3">Статус</th></tr></thead><tbody>{drivers.map((driver: Driver) => <tr key={driver.driver_number} className="border-t border-white/5 hover:bg-white/[0.03]"><td className="px-4 py-3 font-black">{pos(driver.finishing_position)}</td><td className="px-4 py-3"><button onClick={() => { setSelectedDriver(driver.driver_number); setTab("laps"); }} className="flex items-center gap-3 text-left"><img src={driver.headshot_url || ""} className="h-10 w-10 rounded-xl bg-black/40 object-cover" /><span><span className="block font-bold">{driver.full_name}</span><span className="text-xs text-zinc-500">#{driver.driver_number} • {driver.name_acronym}</span></span></button></td><td className="px-4 py-3 font-bold" style={{ color: teamColor(driver.team_colour) }}>{driver.team_name}</td><td className="px-4 py-3">{pos(driver.starting_position)}</td><td className="px-4 py-3 font-bold text-white">{finishDisplay(driver, race)}</td><td className="px-4 py-3">{bestLapDisplay(driver)}</td><td className="px-4 py-3">{pos(driver.classified_laps)}</td><td className="px-4 py-3">{driver.pit_stop_count ?? driver.pit_stops?.length ?? 0}</td><td className="px-4 py-3 text-xs text-zinc-400">{statusDisplay(driver)}</td></tr>)}</tbody></table></div>
       </div>
     </section>
