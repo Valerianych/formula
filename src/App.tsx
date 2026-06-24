@@ -357,7 +357,7 @@ export default function App() {
             <div className="grid h-12 w-12 place-items-center rounded-2xl bg-[#e10600] text-xl font-black italic text-white shadow-lg shadow-red-950/50">F1</div>
             <div>
               <h1 className="text-xl font-black uppercase tracking-tight text-white">F1 Race Analytics</h1>
-              <p className="text-xs text-zinc-400">OpenF1 Historical Data • GigaChat • локальный кэш</p>
+              <p className="text-xs text-zinc-400">OpenF1 Historical Data • GigaChat •</p>
             </div>
           </div>
           <nav className="flex gap-2 overflow-x-auto rounded-2xl border border-white/10 bg-black/30 p-1">
@@ -406,7 +406,6 @@ export default function App() {
                 <p className="mt-2 text-sm text-zinc-400">{race.session.location}, {race.session.country_name} • {formatDate(race.session.date_start)}</p>
                 <div className="mt-4 flex flex-wrap gap-2 text-xs">
                   <span className="rounded-full bg-emerald-500/10 px-3 py-1 font-bold text-emerald-300">{race.data_quality?.source || "OpenF1 API"}</span>
-                  <span className="rounded-full bg-blue-500/10 px-3 py-1 font-bold text-blue-300">без моков</span>
                   <span className="rounded-full bg-white/5 px-3 py-1 font-bold text-zinc-300">{race.data_quality?.has_laps ? "круги доступны" : "только итог/без кругов"}</span>
                 </div>
               </div>
